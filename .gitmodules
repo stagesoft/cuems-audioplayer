@@ -1,0 +1,6 @@
+[submodule "mtcreceiver_class"]
+	path = mtcreceiver_class
+	url = https://github.com/stagesoft/mtcreceiver_class.git
+[submodule "oscreceiver_class"]
+	path = oscreceiver_class
+	url = https://github.com/stagesoft/oscreceiver_class.git
