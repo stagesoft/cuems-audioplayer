@@ -63,24 +63,38 @@ AudioPlayer::AudioPlayer(   int port,
 
     //////////////////////////////////////////////////////////
     // Set up working class members
-    // MTC follow tolerance
-    followTollerance = TOLLERANCE * (sampleRate / 1000) * nChannels * headStep;
+
+
+
     // Per channel volume param to process audio
     volumeMaster = new float[nChannels];
     for ( unsigned short int i = 0; i < nChannels; i++ ) {
         volumeMaster[i] = 1.0;
     }
-    // File header read so initial offset
-    headOffset = audioFile.tellg();
-    playHead = headOffset;
 
+    // File header read so initial offset
+    headOffset = audioFile.headerSize;
+
+    // Audio frame size calc
+    audioFrameSize = nChannels * headStep;
+    audioSecondSize = sampleRate * audioFrameSize;
+
+    intermediate = new short int[nChannels];
 
 
     //////////////////////////////////////////////////////////
     // Setting our audio stream parameters
     // Check for audio devices
-    if ( audio.getDeviceCount() == 0 ) {
-        std::cout << "No audio devices found on API:" << std::to_string(audio.getCurrentApi()) << endl;
+    try {
+        if ( audio.getDeviceCount() == 0 ) {
+            std::cout << "No audio devices found on API:" << 
+                std::to_string(audio.getCurrentApi()) << endl << endl;
+
+            exit(EXIT_FAILURE);
+        }
+    }
+    catch ( RtAudioError &error ) {
+        std::cout << error.getMessage();
 
         exit(EXIT_FAILURE);
     }
@@ -129,6 +143,7 @@ AudioPlayer::~AudioPlayer( void ) {
 
     // Delete dinamically reserved members
     delete []volumeMaster;
+    delete []intermediate;
 
 }
 
@@ -139,25 +154,33 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
 
     AudioPlayer *ap = (AudioPlayer*) data;
 
-    unsigned int count = 0;
-    short int* intermediate;
-    unsigned int read = 0;
-    double mtcHead = ap->mtcReceiver.mtcHead;
-
-    intermediate = new short int[ap->nChannels];
-
+    // If we are playing audio...
     if ( ap->audioFile.good() && ap->mtcReceiver.isTimecodeRunning && ap->followingMtc ) {
+        unsigned int count = 0;
+        unsigned int read = 0;
 
-        unsigned int audioFrameSize = ap->nChannels * ap->headStep;
-        double playHeadInMs = (ap->playHead / (ap->sampleRate * audioFrameSize)) * 1000;
+        ap->headMutex.lock();
+
+        double mtcHeadInBytes = ( ap->mtcReceiver.mtcHead / 1000 ) * (double) ap->audioSecondSize;
+
+        double difference = fabs( ap->playHead - mtcHeadInBytes );
+        double tollerance = 2 * (1 / (double) ap->mtcReceiver.curFrameRate ) * (double) ap->audioSecondSize;
         
         // If our audio play head is out of the boundaries of our mtc frame
         // tollerance... We correct it.
-        if ( fabs(playHeadInMs - mtcHead) > (2 * 1000 / ap->mtcReceiver.curFrameRate) ) {
-            ap->playHead = ap->headOffset + (( mtcHead / 1000 ) * ap->sampleRate * audioFrameSize);
+        //      - 2 MTC frames of tollerance
+        if ( difference > tollerance || ap->offsetChanged ) {
+            // Set new head
+            ap->playHead = mtcHeadInBytes;
 
-            ap->audioFile.seekg((streamoff)(ap->playHead), ios_base::beg); 
+            // Set new offset if any
+            if ( ap->offsetChanged ) {
+                ap->headOffset = ap->headNewOffset;
+                ap->offsetChanged = false;
+            }
 
+            // Seek the file with the new coordinates
+            ap->audioFile.seekg((streamoff)(ap->playHead + ap->headOffset), ios_base::beg);
         }
 
         for ( unsigned int i = 0; i < nBufferFrames; i++ ) {
@@ -167,38 +190,41 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
                 // Read operation to the intermediate buffer, we read the size of our 
                 // sample by the number of channels times, from file
                 // read += fread( &intermediate[i], 1, ap->headStep, file );
-                ap->audioFile.read((char*) &intermediate[i], ap->headStep);
+                ap->audioFile.read((char*) &ap->intermediate[i], ap->headStep);
                 read += ap->audioFile.gcount();
 
-                intermediate[i] *= ap->volumeMaster[i];
+                ap->intermediate[i] *= ap->volumeMaster[i];
 
             }
 
-            memcpy((char *)outputBuffer + count, intermediate, audioFrameSize);
+            memcpy((char *)outputBuffer + count, ap->intermediate, ap->audioFrameSize);
 
             if ( read > 0 ) count += read; else break;
         }
 
         ap->playHead += count;
 
+        ap->headMutex.unlock();
+
+        // If we didn't read enough butes to fill the buffer, let's put some
+        // silence aferwards copying zeros to the rest of the buffer
         if ( count < nBufferFrames ) {
-            unsigned long int bytes = (nBufferFrames - count) * ap->nChannels * ap->headStep;
-            unsigned long int startByte = count * ap->nChannels * ap->headStep;
+            unsigned long int bytes = (nBufferFrames - count) * ap->audioFrameSize;
+            unsigned long int startByte = count * ap->audioFrameSize;
 
             memset( (char *)(outputBuffer) + startByte, 0, bytes );
 
             ap->endOfStream = true;
-            delete[] intermediate;
             return 1;
         }
 
     }
+    // If we are not playing audio... Just copy silence...
     else {
-        memset( (char *)(outputBuffer), 0, nBufferFrames * ap->nChannels * ap->headStep );
+        memset( (char *)(outputBuffer), 0, nBufferFrames * ap->audioFrameSize );
 
     }
 
-    delete[] intermediate;
     return 0;
 
 }
@@ -229,6 +255,24 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
             m.ArgumentStream() >> volumeMaster[0] >> osc::EndMessage;
             volumeMaster[1] = volumeMaster[0];
 
+        // Offset
+        } else if ( std::strcmp( m.AddressPattern(), (OscReceiver::oscAddress + "/offset").c_str() ) == 0 ) {
+            // osc::ReceivedMessageArgumentStream args = m.ArgumentStream();
+            // args >> volumeMaster[0] >> osc::EndMessage;
+            float offsetCalc;
+            m.ArgumentStream() >> offsetCalc >> osc::EndMessage;
+
+            // Offset argument in OSC command is in milliseconds
+            // so we need to calculate in bytes in our file
+
+            offsetCalc /= 1000;                     // To seconds
+            offsetCalc *= (float) audioSecondSize;  // To bytes
+
+            // Plus the standard header size
+            headNewOffset += audioFile.headerSize;
+
+            offsetChanged = true;
+
         } else if ( std::strcmp( m.AddressPattern(), (OscReceiver::oscAddress + "/load").c_str() ) == 0 ) {
             const char* newPath;
             m.ArgumentStream() >> newPath >> osc::EndMessage;
@@ -239,8 +283,9 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
             audioFile.loadFile(audioPath.c_str());
             std::cout << "loadFile Called" << endl;
         } else if ( std::strcmp( m.AddressPattern(), (OscReceiver::oscAddress + "/play").c_str() ) == 0 ) {
-            fileLoaded = !fileLoaded;
+            // TO DO
         } else if ( std::strcmp( m.AddressPattern(), (OscReceiver::oscAddress + "/stop").c_str() ) == 0 ) {
+            // TO DO
         }
         
     } catch ( osc::Exception& e ) {

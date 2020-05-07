@@ -1,6 +1,6 @@
 /* LICENSE TEXT
 
-    audioplayer for linux based using RtAudio and RtMidi libraries to
+    DmxPlayer for linux based using RtAudio and RtMidi libraries to
     process audio and receive MTC sync. It also uses oscpack to receive
     some configurations through osc commands.
     Copyright (C) 2020  Stage Lab & bTactic.
@@ -23,20 +23,41 @@
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
-// Stage Lab SysQ audio player main header file
+// Stage Lab SysQ command line parser class source file
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 
-#include <string>
-#include <filesystem>
 #include "commandlineparser_class.h"
-#include "audioplayer_class.h"
 
 //////////////////////////////////////////////////////////
-// Functions declarations
+CommandLineParser::CommandLineParser (int &argc, char **argv) {
+    for ( int i = 1; i < argc; ++i ) {
+        this->args.push_back( std::string(argv[i]) );
+    }
+}
 
-void showcopyright( void );
-void showusage( void );
-void showwarrantydisclaimer( void );
-void showcopydisclaimer( void );
+//////////////////////////////////////////////////////////
+CommandLineParser::~CommandLineParser ( void ) {
+}
+
+
+//////////////////////////////////////////////////////////
+const std::string& CommandLineParser::getParam( const std::string &option ) const {
+    std::vector<std::string>::const_iterator itr;
+    
+    itr =  std::find( this->args.begin(), this->args.end(), option );
+
+    if ( itr != this->args.end() && ++itr != this->args.end()){
+        return *itr;
+    }
+
+    static const std::string empty_string("");
+    return empty_string;
+}
+
+//////////////////////////////////////////////////////////
+bool CommandLineParser::optionExists( const std::string &option ) const {
+    return std::find(this->args.begin(), this->args.end(), option) 
+        != this->args.end();
+}

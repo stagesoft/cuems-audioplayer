@@ -43,6 +43,7 @@
 #include <vector>
 #include <iostream>
 #include <iomanip>
+#include <mutex>
 #include <rtaudio/RtAudio.h>
 #include <rtmidi/RtMidi.h>
 #include "audiofstream_class.h"
@@ -59,7 +60,7 @@ class AudioPlayer : public OscReceiver
         //////////////////////////////////////////
         // Constructors and destructors
         AudioPlayer(    int port = 7000,
-                        const char *oscRoute = "/node0/audioplayer1",
+                        const char *oscRoute = "/",
                         const char *filePath = "", 
                         unsigned int numberOfChannels = 2, 
                         unsigned int sRate = 44100, 
@@ -79,6 +80,10 @@ class AudioPlayer : public OscReceiver
         unsigned int bufferFrames;                      // 2048 sample frames
         unsigned int deviceID;                          // 0 -> default device
 
+        unsigned int audioFrameSize;                    // Audio frame size in bytes
+        unsigned int audioSecondSize;                   // Audio second size in bytes
+
+        short int* intermediate;
         float* volumeMaster;             // Volumen master multiplier TODO: per channel
 
         // Rt Objects
@@ -91,22 +96,22 @@ class AudioPlayer : public OscReceiver
         static bool endOfStream;                // Is the end of the stream reached already?
         static bool followingMtc;               // Is head following MTC?
 
-        static double playHead;                 // Current reading head position
+        static double playHead;                 // Current reading head position in bytes
+        std::mutex headMutex;
 
-        double headSpeed;                       // Head speed
-        double headAccel;                       // Head acceleration
+        float headSpeed;                       // Head speed
+        float headAccel;                       // Head acceleration
         std::atomic<double> playheadControl;
-        unsigned int headStep = 2;              // Head step, by now SINT16 format, 2 bytes
+        unsigned int headStep = 2;              // Head step per channel, by now SINT16 format, 2 bytes
         double headOffset = 0;                  // Head offset
-        double followTollerance = 0;            // Following tollerance allowed
+        bool offsetChanged = false;
+        double headNewOffset = 0;               // Head offset to update through OSC
+
         bool stopOnMTCLost = true;              // Stop on MTC signal lost?
 
     //////////////////////////////////////////////////////////
     // Private members
     private:
-
-        bool fileLoaded = false;
-        // void loadFile( void );
 
         // Config functions, maybe to be implemented
         // bool loadNodeConfig( void );

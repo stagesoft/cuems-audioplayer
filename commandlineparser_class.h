@@ -1,6 +1,6 @@
 /* LICENSE TEXT
 
-    audioplayer for linux based using RtAudio and RtMidi libraries to
+    DmxPlayer for linux based using RtAudio and RtMidi libraries to
     process audio and receive MTC sync. It also uses oscpack to receive
     some configurations through osc commands.
     Copyright (C) 2020  Stage Lab & bTactic.
@@ -23,20 +23,57 @@
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
-// Stage Lab SysQ audio player main header file
+// Stage Lab SysQ command line parser class header file
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
+#ifndef COMMANDLINEPARSER_CLASS_H
+#define COMMANDLINEPARSER_CLASS_H
 
 #include <string>
-#include <filesystem>
-#include "commandlineparser_class.h"
-#include "audioplayer_class.h"
+#include <vector>
+#include <algorithm>
+
+using namespace std;
+
+class CommandLineParser
+{
+    public:
+        CommandLineParser (int &argc, char **argv);
+        ~CommandLineParser ( void );
+
+        const std::string& getParam( const std::string &option ) const;
+
+        bool optionExists( const std::string &option ) const;
+
+    private:
+        std::vector <std::string> args;
+};
 
 //////////////////////////////////////////////////////////
-// Functions declarations
+// USE EXAMPLE 
+/*
+int main(int argc, char **argv){
 
-void showcopyright( void );
-void showusage( void );
-void showwarrantydisclaimer( void );
-void showcopydisclaimer( void );
+    // Setting the parser
+    CommandLineParser input(argc, argv);
+
+    // Looking for a flag maybe?
+    if ( input.cmdOptionExists("-h") ) {
+        // Do stuff...
+
+    }
+    
+    // Looking for a parameter?
+    const std::string &filename = input.getCmdOption("-f");
+
+    if (!filename.empty()){
+        // Do interesting things...
+
+    }
+
+    return 0;
+}
+*/
+
+#endif // COMMANDLINEPARSER_CLASS_H

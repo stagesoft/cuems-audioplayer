@@ -42,40 +42,97 @@ using namespace std;
 // Main application function
 int main( int argc, char *argv[] ) {
 
-    AudioPlayer* myAudioPlayer;
+    AudioPlayer* myAudioPlayer = NULL;
 
     //////////////////////////////////////////////////////////
     // Parse command line
-    if ( argc == 3 && !strcmp( argv[1], "show" ) ) {
+    if ( argc < 2 ) {
+        showcopyright();        
+        showusage();
+        
+        exit( EXIT_FAILURE );
+    }
+
+    // If there is at least one we parse the command line
+    CommandLineParser argParser(argc, argv);
+
+    // --show or -s command parse
+    if ( argParser.optionExists("--show") ) {
+        std::string arg = argParser.getParam("--show");
+
         showcopyright();
-        if ( !strcmp( argv[2], "w") ) showwarrantydisclaimer();
-        else if ( !strcmp( argv[2], "c") ) showcopydisclaimer();
+
+        if ( arg.empty() ) {
+            showusage();
+        } else if ( arg == "w" ) {
+            showwarrantydisclaimer();
+        } else if ( arg == "c" ) {
+            showcopydisclaimer();
+        }
 
         exit( EXIT_FAILURE );
     }
 
-    if ( argc < 3 ) {
-        showcopyright();        
-        std::cout << "Usage :    audioplayer <osc_port> <osc_path> <wav_file_path>" << endl <<
-            "           Default audio params are : 2 ch x 44.1K -> default device" << endl;
+    // --file or -f command parse and filename retreival and check
+    std::filesystem::path filePath;
 
-        exit( EXIT_FAILURE );
-    }
-    else if ( argc < 4 ) {
-        // Creating our audio player without audio file spec
-        myAudioPlayer = new AudioPlayer( atoi(argv[1]), argv[2] );
+    if ( argParser.optionExists("--file") || argParser.optionExists("-f") ) {
+        filePath = argParser.getParam("--file");
 
-    }
-    else if ( argc == 4 ) {
-        // Creating our audio player with audio file spec
-        myAudioPlayer = new AudioPlayer( atoi(argv[1]), argv[2], argv[3] );
-    }
-    else if ( argc > 4 ) {
-        showcopyright();        
-        std::cout << "Usage :    audioplayer <osc_port> <osc_path> <wav_file_path>" << endl <<
-            "           Default audio params are : 2 ch x 44.1K -> default device" << endl;
+        if ( filePath.empty() ) filePath = argParser.getParam("-f");
 
-        exit( EXIT_FAILURE );
+        if ( filePath.empty() ) {
+            // Not file path specified after file option
+            std::cout << "File not specified after --file or -f option." << endl;
+
+            exit( EXIT_FAILURE );
+        }
+    }
+
+    if ( !filePath.empty() && filePath.is_relative() ) {
+        filePath = std::filesystem::absolute( filePath );
+
+        if ( !std::filesystem::exists(filePath) ) {
+            // File does not exist
+            std::cout << "Unable to locate file: " << filePath << endl;
+
+            exit( EXIT_FAILURE );
+        }
+    }
+
+    // --port or -p command parse and port number retreival and check
+    unsigned int portNumber = 0;
+
+    if ( argParser.optionExists("--port") || argParser.optionExists("-p") ) {
+        std::string portParam = argParser.getParam("--port");
+
+        if ( portParam.empty() ) portParam = argParser.getParam("-p");
+
+        if ( portParam.empty() ) {
+            // Not valid port number specified after port option
+            std::cout << "Not valid port number after --port or -p option." << endl;
+
+            exit( EXIT_FAILURE );
+        }
+        else {
+            portNumber = std::stoi( portParam );
+        }
+    }
+
+    // End of command line parsing
+    //////////////////////////////////////////////////////////
+
+
+
+    if ( filePath.empty() || portNumber == 0 ) {
+        std::cout << "Wrong parameters! Check usage..." << endl << endl;
+        showcopyright();
+        showusage();
+
+        exit ( EXIT_FAILURE );
+    }
+    else {
+        myAudioPlayer = new AudioPlayer( portNumber, "", filePath.c_str() );
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -135,4 +192,17 @@ void showcopydisclaimer( void ) {
         "GNU General Public License for more details." << endl << endl << 
         "You should have received a copy of the GNU General Public License" << endl <<
         "along with this program.  If not, see <https://www.gnu.org/licenses/>." << endl << endl;
+}
+
+//////////////////////////////////////////////////////////
+void showusage( void ) {
+    std::cout << "Usage :    audioplayer --port <osc_port> --file <wav_file_path>" << endl <<
+        "           --port , -p : OSC port to listen to." << endl <<
+        "           --file , -f : xml file to read DMX scenes from." << endl <<
+        "               If not stated, default XML file is ./dmx.xml" << endl <<
+        "           --show : shows license disclaimers" << endl <<
+        "               w : shows warranty disclaimer" << endl << 
+        "               c : shows copyright disclaimer" << endl << endl << 
+        "           Default audio params are : 2 ch x 44.1K -> default device" << endl << endl <<
+        "           audioplayer uses Jack Audio environment, make sure it's running." << endl;
 }

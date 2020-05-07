@@ -63,6 +63,8 @@ class AudioFstream : public ifstream
         bool checkHeader( void );
         bool loadFile( const char* path );
 
+        unsigned int headerSize = 0;
+
 };
 
 #endif // AUDIOFSTREAM_CLASS_H

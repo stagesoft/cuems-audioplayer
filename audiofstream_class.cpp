@@ -81,6 +81,8 @@ bool AudioFstream::checkHeader( void ) {
         read((char*) &headerData.SubChunk2Size, 4);
         bytesRead += gcount();
 
+        headerSize = bytesRead;
+
         if ( bytesRead == 44 ) {
             std::cout << endl << "WAV Header reading results:" << endl;
             std::cout << "-> ChunkID \"" << headerData.ChunkID << "\"" << endl;

@@ -30,3 +30,8 @@
 *.exe
 *.out
 *.app
+audioplayer
+
+# Visual Code dirs
+.vscode
+.vscode/**
