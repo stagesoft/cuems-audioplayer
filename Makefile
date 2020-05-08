@@ -5,7 +5,7 @@ CXXFLAGS = -Wall -Wextra -std=c++17 -O3 -g -D__UNIX_JACK__
 #-D__LINUX_ALSA__
 #-D__UNIX_JACK__
 LDFLAGS =  -fsanitize=address
-LBLIBS = -lrtaudio -lrtmidi -lpthread \
+LBLIBS = -lrtaudio -lrtmidi -lpthread -lstdc++fs \
 			./oscreceiver_class/oscpack/osc/OscReceivedElements.o \
 			./oscreceiver_class/oscpack/ip/posix/UdpSocket.o
 
