@@ -32,7 +32,6 @@
 
 ////////////////////////////////////////////
 // Initializing static class members
-// bool AudioPlayer::stopOnLost = false;
 
 double AudioPlayer::playHead = 0;
 bool AudioPlayer::followingMtc = true;
@@ -41,20 +40,28 @@ bool AudioPlayer::endOfStream = false;
 
 //////////////////////////////////////////////////////////
 AudioPlayer::AudioPlayer(   int port, 
-                            const char *oscRoute ,
-                            const char *filePath , 
+                            double initOffset,
+                            double finalWait,
+                            const string oscRoute ,
+                            const string filePath , 
+                            const string uuid,
+                            const bool stopOnLostFlag,
                             unsigned int numberOfChannels, 
                             unsigned int sRate, 
                             unsigned int device,
                             RtAudio::Api audioApi )
                             :   // Members initialization
-                            OscReceiver(port, oscRoute),
+                            OscReceiver(port, oscRoute.c_str()),
                             audioPath(filePath),
                             nChannels(numberOfChannels),
                             sampleRate(sRate),
                             deviceID(device),
                             audio(audioApi),
-                            audioFile(filePath)
+                            audioFile(filePath.c_str()),
+                            headOffset(initOffset),
+                            endWaitTime(finalWait),
+                            playerUuid(uuid),
+                            stopOnMTCLost(stopOnLostFlag)
  {
     //////////////////////////////////////////////////////////
     // Config tasks to be implemented later maybe
@@ -88,7 +95,8 @@ AudioPlayer::AudioPlayer(   int port,
     try {
         if ( audio.getDeviceCount() == 0 ) {
             std::cout << "No audio devices found on API:" << 
-                std::to_string(audio.getCurrentApi()) << endl << endl;
+                std::to_string(audio.getCurrentApi()) << endl << endl <<
+                "Maybe Jack Audio Kit is not running." << endl << endl;
 
             exit(EXIT_FAILURE);
         }
@@ -100,9 +108,15 @@ AudioPlayer::AudioPlayer(   int port,
     }
 
     // Get the default audio device and set stream parameters
+    RtAudio::StreamParameters streamParams;
     streamParams.deviceId = audio.getDefaultOutputDevice();
     streamParams.nChannels = nChannels;
     streamParams.firstChannel = 0;
+
+    RtAudio::StreamOptions streamOps;
+    streamOps.streamName = "a" + to_string(oscPort) + playerUuid;
+
+    std::cout << "audioplayer UUID: " << streamOps.streamName << endl << endl;
 
     try {
         audio.openStream(  &streamParams, 
@@ -111,7 +125,8 @@ AudioPlayer::AudioPlayer(   int port,
                             sampleRate, 
                             &bufferFrames, 
                             &audioCallback,
-                            (void *) this );
+                            (void *) this,
+                            &streamOps );
 
         audio.startStream();
     }
@@ -155,7 +170,10 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
     AudioPlayer *ap = (AudioPlayer*) data;
 
     // If we are playing audio...
-    if ( ap->audioFile.good() && ap->mtcReceiver.isTimecodeRunning && ap->followingMtc ) {
+    if (    ap->audioFile.good() && ! ap->audioFile.eof() &&
+            ap->mtcReceiver.isTimecodeRunning && 
+            ap->followingMtc ) {
+
         unsigned int count = 0;
         unsigned int read = 0;
 
@@ -208,6 +226,7 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
 
         // If we didn't read enough butes to fill the buffer, let's put some
         // silence aferwards copying zeros to the rest of the buffer
+        /*
         if ( count < nBufferFrames ) {
             unsigned long int bytes = (nBufferFrames - count) * ap->audioFrameSize;
             unsigned long int startByte = count * ap->audioFrameSize;
@@ -217,7 +236,11 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
             ap->endOfStream = true;
             return 1;
         }
+        */
 
+        if ( ap->audioFile.eof() ) {
+            ap->endOfStream = true;
+        }
     }
     // If we are not playing audio... Just copy silence...
     else {
@@ -259,14 +282,14 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
         } else if ( std::strcmp( m.AddressPattern(), (OscReceiver::oscAddress + "/offset").c_str() ) == 0 ) {
             // osc::ReceivedMessageArgumentStream args = m.ArgumentStream();
             // args >> volumeMaster[0] >> osc::EndMessage;
-            float offsetCalc;
-            m.ArgumentStream() >> offsetCalc >> osc::EndMessage;
+            float offsetOSC;
+            m.ArgumentStream() >> offsetOSC >> osc::EndMessage;
 
             // Offset argument in OSC command is in milliseconds
             // so we need to calculate in bytes in our file
 
-            offsetCalc /= 1000;                     // To seconds
-            offsetCalc *= (float) audioSecondSize;  // To bytes
+            headNewOffset = offsetOSC / 1000;                     // To seconds
+            headNewOffset *= (double) audioSecondSize;  // To bytes
 
             // Plus the standard header size
             headNewOffset += audioFile.headerSize;
@@ -286,6 +309,11 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
             // TO DO
         } else if ( std::strcmp( m.AddressPattern(), (OscReceiver::oscAddress + "/stop").c_str() ) == 0 ) {
             // TO DO
+        /*} else if ( std::strcmp( m.AddressPattern(), (OscReceiver::oscAddress + "/quit").c_str() ) == 0 ) {
+            raise(SIGTERM);
+        } */
+        } else if ( (string)m.AddressPattern() == (OscReceiver::oscAddress + "/quit") ) {
+            raise(SIGTERM);
         }
         
     } catch ( osc::Exception& e ) {

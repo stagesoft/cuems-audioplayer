@@ -34,7 +34,7 @@
 // Initializing static class members
 
 ////////////////////////////////////////////
-AudioFstream::AudioFstream( const char* filename, 
+AudioFstream::AudioFstream( const string filename, 
                             ios_base::openmode openmode ) 
                             : ifstream(filename, openmode)
 {
@@ -110,7 +110,7 @@ bool AudioFstream::checkHeader( void ) {
 }
 
 //////////////////////////////////////////////////////////
-bool AudioFstream::loadFile( const char * path ) {
+bool AudioFstream::loadFile( const string path ) {
     open( path, ios::binary | ios::in );
 
     if ( bad() ) {

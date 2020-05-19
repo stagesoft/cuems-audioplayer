@@ -1,32 +1,37 @@
+####### USAGE
+# make - buidls with debug options
+# make release - builds release options
+# make clean - removes object files
+
 #Compiler, compiler flags and linker flags
 CXX = g++
-#CXXFLAGS = -Wall -Werror -Wextra -std=c++17 -O3 -g -I . -I ..
-CXXFLAGS = -Wall -Wextra -std=c++17 -O3 -g -D__UNIX_JACK__
-#-D__LINUX_ALSA__
-#-D__UNIX_JACK__
+CXXFLAGS = -Wall -Wextra -std=c++17 -D__UNIX_JACK__
+
 LDFLAGS =  -fsanitize=address
 LBLIBS = -lrtaudio -lrtmidi -lpthread -lstdc++fs \
 			./oscreceiver_class/oscpack/osc/OscReceivedElements.o \
 			./oscreceiver_class/oscpack/ip/posix/UdpSocket.o
 
-# Version ids
-
-NAME := audioplayer
-SRC := $(wildcard *.cpp) $(wildcard ./oscreceiver_class/*.cpp) $(wildcard ./mtcreceiver_class/*.cpp)
+TARGET := audioplayer
+SRC := $(SRC_DIR)$(wildcard *.cpp) $(wildcard ./oscreceiver_class/*.cpp) $(wildcard ./mtcreceiver_class/*.cpp)
 INC := $(wildcard *.h)
 OBJ := $(SRC:.cpp=.o)
 
-.PHONY: clean
+.PHONY: clean clear
 
-all: app
+all: debug
 
-app: $(NAME)
+debug: CXXFLAGS += -g -Og
+debug: release
 
-$(NAME): clear $(OBJ)
+release: CXXFLAGS += -O3
+release: $(TARGET)
+
+$(TARGET): $(OBJ)
 	$(CXX) $(OBJ) -o $@ $(LBLIBS)
 
-clear:
+wipe:
 	@clear
 
 clean:
-	rm -rf $(OBJ)
+	@rm -rf $(OBJ)

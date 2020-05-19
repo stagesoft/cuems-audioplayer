@@ -31,18 +31,17 @@
 #include "main.h"
 
 using namespace std;
+namespace fs = filesystem;
 
 //////////////////////////////////////////////////////////
-// Initializing static class members
-// unsigned short MtcMaster::instanceCount = 0; // Instance counter
-// std::mutex MtcMaster::mtx;
-// bool MtcMaster::playing = false;
+// Initializing static class members and global vars
+AudioPlayer* myAudioPlayer = NULL;
 
 //////////////////////////////////////////////////////////
 // Main application function
 int main( int argc, char *argv[] ) {
 
-    AudioPlayer* myAudioPlayer = NULL;
+    signal(SIGTERM, sigTermHandler);
 
     //////////////////////////////////////////////////////////
     // Parse command line
@@ -74,9 +73,11 @@ int main( int argc, char *argv[] ) {
     }
 
     // --file or -f command parse and filename retreival and check
-    std::filesystem::path filePath;
-
-    if ( argParser.optionExists("--file") || argParser.optionExists("-f") ) {
+    fs::path filePath;
+    // retreival
+    if ( argParser.endingFilename ) {
+        filePath = argParser.getEndingFilename();
+    } else if ( argParser.optionExists("--file") || argParser.optionExists("-f") ) {
         filePath = argParser.getParam("--file");
 
         if ( filePath.empty() ) filePath = argParser.getParam("-f");
@@ -88,11 +89,11 @@ int main( int argc, char *argv[] ) {
             exit( EXIT_FAILURE );
         }
     }
-
+    // check
     if ( !filePath.empty() && filePath.is_relative() ) {
-        filePath = std::filesystem::absolute( filePath );
+        filePath = fs::absolute( filePath );
 
-        if ( !std::filesystem::exists(filePath) ) {
+        if ( !fs::exists(filePath) ) {
             // File does not exist
             std::cout << "Unable to locate file: " << filePath << endl;
 
@@ -119,6 +120,70 @@ int main( int argc, char *argv[] ) {
         }
     }
 
+    // --offset or -o command parse and offset retreival and check
+    long int offsetMilliseconds = 0;
+
+    if ( argParser.optionExists("--offset") || argParser.optionExists("-o") ) {
+        std::string offsetParam = argParser.getParam("--offset");
+
+        if ( offsetParam.empty() ) offsetParam = argParser.getParam("-o");
+
+        if ( offsetParam.empty() ) {
+            // Not valid port number specified after port option
+            std::cout << "Not valid offset integer after --offset or -o option." << endl;
+
+            exit( EXIT_FAILURE );
+        }
+        else {
+            offsetMilliseconds = std::stoi( offsetParam );
+        }
+    }
+
+    // --wait or -w command parse and offset retreival and check
+    long int endWaitMilliseconds = 0;
+
+    if ( argParser.optionExists("--wait") || argParser.optionExists("-w") ) {
+        std::string waitParam = argParser.getParam("--wait");
+
+        if ( waitParam.empty() ) waitParam = argParser.getParam("-w");
+
+        if ( waitParam.empty() ) {
+            // Not valid port number specified after port option
+            std::cout << "Not valid wait integer after --wait or -w option." << endl;
+
+            exit( EXIT_FAILURE );
+        }
+        else {
+            endWaitMilliseconds = std::stoi( waitParam );
+        }
+    }
+
+    // --uuid or -u command parse and offset retreival and check
+    string processUuid = "";
+
+    if ( argParser.optionExists("--uuid") || argParser.optionExists("-u") ) {
+        std::string uuidParam = argParser.getParam("--uuid");
+
+        if ( uuidParam.empty() ) uuidParam = argParser.getParam("-u");
+
+        if ( uuidParam.empty() ) {
+            // Not valid port number specified after port option
+            std::cout << "Not valid uuid string after --uuid or -u option." << endl;
+
+            exit( EXIT_FAILURE );
+        }
+        else {
+            processUuid = uuidParam ;
+        }
+    }
+
+    // --ciml or -c command parse and flag set
+    bool stopOnLostFlag = true;
+
+    if ( argParser.optionExists("--ciml") || argParser.optionExists("-c") ) {
+            stopOnLostFlag = false ;
+    }
+
     // End of command line parsing
     //////////////////////////////////////////////////////////
 
@@ -132,7 +197,13 @@ int main( int argc, char *argv[] ) {
         exit ( EXIT_FAILURE );
     }
     else {
-        myAudioPlayer = new AudioPlayer( portNumber, "", filePath.c_str() );
+        myAudioPlayer = new AudioPlayer(    portNumber, 
+                                            (double) offsetMilliseconds, 
+                                            (double) endWaitMilliseconds, 
+                                            "", 
+                                            filePath.c_str(),
+                                            processUuid,
+                                            stopOnLostFlag );
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -196,13 +267,38 @@ void showcopydisclaimer( void ) {
 
 //////////////////////////////////////////////////////////
 void showusage( void ) {
-    std::cout << "Usage :    audioplayer --port <osc_port> --file <wav_file_path>" << endl <<
-        "           --port , -p : OSC port to listen to." << endl <<
-        "           --file , -f : xml file to read DMX scenes from." << endl <<
-        "               If not stated, default XML file is ./dmx.xml" << endl <<
-        "           --show : shows license disclaimers" << endl <<
-        "               w : shows warranty disclaimer" << endl << 
-        "               c : shows copyright disclaimer" << endl << endl << 
-        "           Default audio params are : 2 ch x 44.1K -> default device" << endl << endl <<
-        "           audioplayer uses Jack Audio environment, make sure it's running." << endl;
+    std::cout << "Usage :    audioplayer --port <osc_port> [other options] <wav_file_path>" << endl << endl <<
+        "           COMPULSORY OPTIONS:" << endl << 
+        "           --file , -f <file_path> : wav file to read audio data from." << endl <<
+        "               File name can also be stated as the last argument with no option indicator." << endl << endl <<
+        "           --port , -p <port_number> : OSC port to listen to." << endl << endl <<
+        "           OPTIONAL OPTIONS:" << endl << 
+        "           --ciml , -c : Continue If Mtc is Lost, flag to define that the player should continue" << endl <<
+        "               if the MTC sync signal is lost. If not specified (standard mode) it stops on lost." << endl << endl <<
+        "           --offset , -o <milliseconds> : playing time offset in milliseconds." << endl <<
+        "               Positive (+) or (-) negative integer indicating time displacement." << endl <<
+        "               Default is 0." << endl << endl <<
+        "           --uuid , -u <uuid_string> : indicates a unique identifier for the process to be recognized" << endl <<
+        "               in different internal identification porpouses such as Jack streams in use." << endl << endl <<
+        "           --wait , -w <milliseconds> : waiting time after reaching the end of the file and before" << endl <<
+        "               quiting the program. Default is 0. -1 indicates the program remains" << endl <<
+        "               running till SIG-TERM or OSC quit is received." << endl << endl <<
+        "           OTHER OPTIONS:" << endl << endl <<
+        "           --show : shows license disclaimers." << endl <<
+        "               w : shows warranty disclaimer." << endl << 
+        "               c : shows copyright disclaimer." << endl << endl << 
+        "           Default audio device params are : 2 ch x 44.1K -> default device." << endl <<
+        "           audioplayer uses Jack Audio environment, make sure it's running." << endl << endl;
 }
+
+//////////////////////////////////////////////////////////
+void sigTermHandler( int signum ) {
+
+    std::cout << endl << endl << "SIGTERM received! Finishing." << endl << endl;
+
+    delete myAudioPlayer;
+
+    exit(signum);
+
+}
+

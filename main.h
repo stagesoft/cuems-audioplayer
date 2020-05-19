@@ -29,6 +29,7 @@
 //////////////////////////////////////////////////////////
 
 #include <string>
+#include <csignal>
 #include <filesystem>
 #include "commandlineparser_class.h"
 #include "audioplayer_class.h"
@@ -40,3 +41,4 @@ void showcopyright( void );
 void showusage( void );
 void showwarrantydisclaimer( void );
 void showcopydisclaimer( void );
+void sigTermHandler( int signum );

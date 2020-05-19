@@ -44,6 +44,7 @@
 #include <iostream>
 #include <iomanip>
 #include <mutex>
+#include <csignal>
 #include <rtaudio/RtAudio.h>
 #include <rtmidi/RtMidi.h>
 #include "audiofstream_class.h"
@@ -60,8 +61,12 @@ class AudioPlayer : public OscReceiver
         //////////////////////////////////////////
         // Constructors and destructors
         AudioPlayer(    int port = 7000,
-                        const char *oscRoute = "/",
-                        const char *filePath = "", 
+                        double initOffset = 0,
+                        double finalWait = 0,
+                        const string oscRoute = "/",
+                        const string filePath = "", 
+                        const string uuid = "",
+                        const bool stopOnLostFlag = true,
                         unsigned int numberOfChannels = 2, 
                         unsigned int sRate = 44100, 
                         unsigned int device = 0,
@@ -73,8 +78,8 @@ class AudioPlayer : public OscReceiver
         string audioPath;
 
         // Audio stream settings
-        RtAudio::StreamParameters streamParams;         // Stream parameters
-        // unsigned int audioApi;                          // Our selected Audio API
+        // RtAudio::StreamParameters streamParams;         // Stream parameters
+        // unsigned int audioApi;                       // Our selected Audio API
         unsigned int nChannels;                         // Our default number of audio channels
         unsigned int sampleRate;                        // Our sample rate
         unsigned int bufferFrames;                      // 2048 sample frames
@@ -86,7 +91,7 @@ class AudioPlayer : public OscReceiver
         short int* intermediate;
         float* volumeMaster;             // Volumen master multiplier TODO: per channel
 
-        // Rt Objects
+        // Our midi and audio objects
         RtAudio audio;
         MtcReceiver mtcReceiver;
         AudioFstream audioFile;
@@ -106,6 +111,10 @@ class AudioPlayer : public OscReceiver
         double headOffset = 0;                  // Head offset
         bool offsetChanged = false;
         double headNewOffset = 0;               // Head offset to update through OSC
+
+        double endWaitTime = 0;                 // End time to wait before quitting
+
+        string playerUuid = "";                 // Player UUID for identification porpouses
 
         bool stopOnMTCLost = true;              // Stop on MTC signal lost?
 

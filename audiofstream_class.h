@@ -39,7 +39,7 @@ using namespace std;
 class AudioFstream : public ifstream
 {
     public:
-        AudioFstream(   const char* filename = "", 
+        AudioFstream(   const string filename = "", 
                         ios_base::openmode openmode = ios_base::in | ios_base::binary );
         inline ~AudioFstream() { };
 
@@ -61,7 +61,7 @@ class AudioFstream : public ifstream
         } headerData;
 
         bool checkHeader( void );
-        bool loadFile( const char* path );
+        bool loadFile( const string path );
 
         unsigned int headerSize = 0;
 

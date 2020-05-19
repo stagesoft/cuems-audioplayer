@@ -35,15 +35,16 @@ CommandLineParser::CommandLineParser (int &argc, char **argv) {
     for ( int i = 1; i < argc; ++i ) {
         this->args.push_back( std::string(argv[i]) );
     }
+
+    if ( (argc % 2) == 0 ) endingFilename = true;
 }
 
 //////////////////////////////////////////////////////////
 CommandLineParser::~CommandLineParser ( void ) {
 }
 
-
 //////////////////////////////////////////////////////////
-const std::string& CommandLineParser::getParam( const std::string &option ) const {
+const std::string CommandLineParser::getParam( const std::string &option ) const {
     std::vector<std::string>::const_iterator itr;
     
     itr =  std::find( this->args.begin(), this->args.end(), option );
@@ -52,12 +53,21 @@ const std::string& CommandLineParser::getParam( const std::string &option ) cons
         return *itr;
     }
 
-    static const std::string empty_string("");
-    return empty_string;
+    return "";
 }
 
 //////////////////////////////////////////////////////////
 bool CommandLineParser::optionExists( const std::string &option ) const {
     return std::find(this->args.begin(), this->args.end(), option) 
         != this->args.end();
+}
+
+//////////////////////////////////////////////////////////
+const std::string CommandLineParser::getEndingFilename( void ) {
+    fs::path lastArg = args[args.size() - 1];
+
+    if ( lastArg.has_filename() ) 
+        return lastArg.string();
+    else
+        return "";
 }

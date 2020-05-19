@@ -33,18 +33,21 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <filesystem>
 
 using namespace std;
-
+namespace fs = filesystem;
 class CommandLineParser
 {
     public:
         CommandLineParser (int &argc, char **argv);
         ~CommandLineParser ( void );
 
-        const std::string& getParam( const std::string &option ) const;
-
+        const std::string getParam( const std::string &option ) const;
+        const std::string getEndingFilename( void );
         bool optionExists( const std::string &option ) const;
+
+        bool endingFilename = false;
 
     private:
         std::vector <std::string> args;
