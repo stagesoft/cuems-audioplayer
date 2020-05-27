@@ -35,7 +35,12 @@
 // #define TIXML_USE_STL
 // #define __LINUX_ALSA__
 // #define __UNIX_JACK__
-#define TOLLERANCE 2000
+#ifndef XJADEO_ADJUSTMENT
+#define XJADEO_ADJUSTMENT 65
+#endif
+#ifndef MTC_FRAMES_TOLLERANCE
+#define MTC_FRAMES_TOLLERANCE 2
+#endif
 
 #include <atomic>
 #include <math.h>
@@ -43,11 +48,12 @@
 #include <vector>
 #include <iostream>
 #include <iomanip>
-#include <mutex>
 #include <csignal>
 #include <rtaudio/RtAudio.h>
 #include <rtmidi/RtMidi.h>
 #include "audiofstream_class.h"
+#include "sysqlogger_class.h"
+#include "sysq_errors.h"
 #include "./mtcreceiver_class/mtcreceiver_class.h"
 #include "./oscreceiver_class/oscreceiver_class.h"
 
@@ -61,8 +67,8 @@ class AudioPlayer : public OscReceiver
         //////////////////////////////////////////
         // Constructors and destructors
         AudioPlayer(    int port = 7000,
-                        double initOffset = 0,
-                        double finalWait = 0,
+                        long int initOffset = 0,
+                        long int finalWait = 0,
                         const string oscRoute = "/",
                         const string filePath = "", 
                         const string uuid = "",
@@ -87,6 +93,7 @@ class AudioPlayer : public OscReceiver
 
         unsigned int audioFrameSize;                    // Audio frame size in bytes
         unsigned int audioSecondSize;                   // Audio second size in bytes
+        unsigned int audioMillisecondSize;              // Audio millisecond size in bytes
 
         short int* intermediate;
         float* volumeMaster;             // Volumen master multiplier TODO: per channel
@@ -96,27 +103,30 @@ class AudioPlayer : public OscReceiver
         MtcReceiver mtcReceiver;
         AudioFstream audioFile;
 
-        // Stream control vars
-        static bool isStreamRunning;            // Is the timecode sync running?
+        // Stream and playing control vars
         static bool endOfStream;                // Is the end of the stream reached already?
-        static bool followingMtc;               // Is head following MTC?
+        static bool endOfPlay;                  // Are we done playing and waiting?
+        long int endTimeStamp = 0;              // Our finish timestamp to calculate end wait
+        static bool followingMtc;               // Is player following MTC?
 
-        static double playHead;                 // Current reading head position in bytes
-        std::mutex headMutex;
+        static long long int playHead;          // Current reading head position in bytes
 
-        float headSpeed;                       // Head speed
-        float headAccel;                       // Head acceleration
-        std::atomic<double> playheadControl;
+        // float headSpeed;                       // Head speed (TO DO)
+        // float headAccel;                       // Head acceleration (TO DO)
+        // std::atomic<double> playheadControl;   // Head reading direction, (TO DO)
+
         unsigned int headStep = 2;              // Head step per channel, by now SINT16 format, 2 bytes
-        double headOffset = 0;                  // Head offset
-        bool offsetChanged = false;
-        double headNewOffset = 0;               // Head offset to update through OSC
+        long int headOffset = 0;                // Head offset
+        bool offsetChanged = false;             // Flag to recognise when the offset is OSC changed
+        long int headNewOffset = 0;             // Head offset to update through OSC
 
-        double endWaitTime = 0;                 // End time to wait before quitting
+        long int endWaitTime = 0;               // End time to wait before quitting
 
         string playerUuid = "";                 // Player UUID for identification porpouses
 
         bool stopOnMTCLost = true;              // Stop on MTC signal lost?
+        bool mtcSignalLost = false;             // Flag to check MTC signal lost?
+        bool mtcSignalStarted = false;          // Flag to check MTC signal started?
 
     //////////////////////////////////////////////////////////
     // Private members
@@ -125,9 +135,6 @@ class AudioPlayer : public OscReceiver
         // Config functions, maybe to be implemented
         // bool loadNodeConfig( void );
         // bool loadMediaConfig( void );
-
-        // Logging functions
-        void log( std::string* message );
 
         //////////////////////////////////////////////////////////
         // Callbacks for audio an dmidi

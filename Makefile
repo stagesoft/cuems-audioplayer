@@ -5,7 +5,10 @@
 
 #Compiler, compiler flags and linker flags
 CXX = g++
-CXXFLAGS = -Wall -Wextra -std=c++17 -D__UNIX_JACK__
+CXXFLAGS = -Wall -Wextra -std=c++17
+
+# User preprocessor defines
+CXXFLAGS += -D__UNIX_JACK__
 
 LDFLAGS =  -fsanitize=address
 LBLIBS = -lrtaudio -lrtmidi -lpthread -lstdc++fs \
@@ -21,11 +24,13 @@ OBJ := $(SRC:.cpp=.o)
 
 all: debug
 
-debug: CXXFLAGS += -g -Og
-debug: release
-
 release: CXXFLAGS += -O3
-release: $(TARGET)
+release: target
+
+debug: CXXFLAGS += -g -Og
+debug: target
+
+target: $(TARGET)
 
 $(TARGET): $(OBJ)
 	$(CXX) $(OBJ) -o $@ $(LBLIBS)

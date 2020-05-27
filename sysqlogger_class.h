@@ -23,50 +23,59 @@
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
-// Stage Lab SysQ audio file stream class header file
+// Stage Lab SysQ logger class header file
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
-#ifndef AUDIOFSTREAM_CLASS_H
-#define AUDIOFSTREAM_CLASS_H
 
-#include <iostream>
+#ifndef SYSQLOGGER_CLASS_H
+#define SYSQLOGGER_CLASS_H
+
+#include <string>
 #include <fstream>
-#include <iomanip>
-#include "sysqlogger_class.h"
-#include "sysq_errors.h"
+#include <filesystem>
+#include <iostream>
+#include <ctime>
 
 using namespace std;
+namespace fs = std::filesystem;
 
-class AudioFstream : public ifstream
+class SysQLogger
 {
     public:
-        AudioFstream(   const string filename = "", 
-                        ios_base::openmode openmode = ios_base::in | ios_base::binary );
-        inline ~AudioFstream() { };
+        SysQLogger( const string file, const string slug );
+        ~SysQLogger( void );
 
-        struct headerData {
-            char ChunkID[5] = "    ";
-            unsigned long int ChunkSize = 0;
-            char Format[5] = "    ";
-            char SubChunk1ID[5] = "    ";
-            unsigned long int SubChunk1Size = 0;
-            unsigned int AudioFormat = 0;
-            unsigned int NumChannels = 0;
-            unsigned long int SampleRate = 0;
-            unsigned long int ByteRate = 0;
-            unsigned int BlockAlign = 0;
-            unsigned int BitsPerSample = 0;
-            
-            char SubChunk2ID[5] = "    ";
-            unsigned long int SubChunk2Size = 0;
-        } headerData;
+        void logOK( const string& message );
+        void logER( const string& message );
+        void logWA( const string& message );
+        void logIN( const string& message );
 
-        bool checkHeader( void );
-        bool loadFile( const string path );
+        // Static funcion to get our singleton pointer everywhere
+        static SysQLogger* getLogger( void );
 
-        unsigned int headerSize = 0;
+        void setNewSlug( const string newSlug );
+        string getSlug( void );
+        bool isLogOpen( void );
+
+    private:
+        // Log file path
+        static fs::path logPath;
+        static std::string programSlug;
+
+        // Our own singleton pointer
+        static SysQLogger* myObjectPointer;
+
+        SysQLogger(const SysQLogger&) {};
+        SysQLogger& operator=(const SysQLogger&){ return *this; };
+        
+        void log( const string& message );
+
+        static ofstream logFile;           // File stream
+
+        // Utility to get date and time string
+        const std::string curDateTime( void);
 
 };
 
-#endif // AUDIOFSTREAM_CLASS_H
+#endif // SYSQLOGGER_CLASS_H

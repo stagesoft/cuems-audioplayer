@@ -23,50 +23,18 @@
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
-// Stage Lab SysQ audio file stream class header file
+// Stage Lab SysQ return error codes for SysQ apps
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
-#ifndef AUDIOFSTREAM_CLASS_H
-#define AUDIOFSTREAM_CLASS_H
 
-#include <iostream>
-#include <fstream>
-#include <iomanip>
-#include "sysqlogger_class.h"
-#include "sysq_errors.h"
+#ifndef SYSQ_ERRORS_H
+#define SYSQ_ERRORS_H
 
-using namespace std;
+#define SYSQ_EXIT_OK                    0               // Success
+#define SYSQ_EXIT_FAILURE               -1              // Generic error
+#define SYSQ_EXIT_WRONG_PARAMETERS      -2
+#define SYSQ_EXIT_WRONG_DATA_FILE       -3
+#define SYSQ_EXIT_AUDIO_DEVICE_ERR      -4              // Perhaps jack not running
 
-class AudioFstream : public ifstream
-{
-    public:
-        AudioFstream(   const string filename = "", 
-                        ios_base::openmode openmode = ios_base::in | ios_base::binary );
-        inline ~AudioFstream() { };
-
-        struct headerData {
-            char ChunkID[5] = "    ";
-            unsigned long int ChunkSize = 0;
-            char Format[5] = "    ";
-            char SubChunk1ID[5] = "    ";
-            unsigned long int SubChunk1Size = 0;
-            unsigned int AudioFormat = 0;
-            unsigned int NumChannels = 0;
-            unsigned long int SampleRate = 0;
-            unsigned long int ByteRate = 0;
-            unsigned int BlockAlign = 0;
-            unsigned int BitsPerSample = 0;
-            
-            char SubChunk2ID[5] = "    ";
-            unsigned long int SubChunk2Size = 0;
-        } headerData;
-
-        bool checkHeader( void );
-        bool loadFile( const string path );
-
-        unsigned int headerSize = 0;
-
-};
-
-#endif // AUDIOFSTREAM_CLASS_H
+#endif

@@ -38,8 +38,15 @@ AudioFstream::AudioFstream( const string filename,
                             ios_base::openmode openmode ) 
                             : ifstream(filename, openmode)
 {
-    checkHeader();
+    if ( bad() ) {
+        std::cerr << "Unable to find or open file!" << endl;
+        SysQLogger::getLogger()->logER("Couldn't open file : " + filename);
+    }
+    else {
+        SysQLogger::getLogger()->logOK("File open OK! : " + filename);
+    }
 
+    checkHeader();
 }
 
 //////////////////////////////////////////////////////////
@@ -84,6 +91,8 @@ bool AudioFstream::checkHeader( void ) {
         headerSize = bytesRead;
 
         if ( bytesRead == 44 ) {
+            /*
+            // Check the header (To do: better checking)
             std::cout << endl << "WAV Header reading results:" << endl;
             std::cout << "-> ChunkID \"" << headerData.ChunkID << "\"" << endl;
             std::cout << "-> ChunkSize " << headerData.ChunkSize << endl;
@@ -98,11 +107,16 @@ bool AudioFstream::checkHeader( void ) {
             std::cout << "-> BitsPerSample " << headerData.BitsPerSample << endl;
             std::cout << "-> SubChunk2ID " << headerData.SubChunk2ID << endl;
             std::cout << "-> SubChunk2Size " << headerData.SubChunk2Size << endl << endl;
+            */
+
+            SysQLogger::getLogger()->logOK("WAV header OK! " + std::to_string(bytesRead) + " bytes read");
 
             return true;
         }
         else {
-            std::cout << "Wrong file header!!!" << endl;
+            std::string str = "Wrong WAV header!!! " + std::to_string(bytesRead) + " bytes read";
+            std::cerr <<  str << endl;
+            SysQLogger::getLogger()->logER(str);
         }
     }
 
@@ -114,12 +128,13 @@ bool AudioFstream::loadFile( const string path ) {
     open( path, ios::binary | ios::in );
 
     if ( bad() ) {
-        std::cout << "Unable to find or open file!" << endl;
+        std::cerr << "Unable to find or open file!" << endl;
+        SysQLogger::getLogger()->logER("Couldn't open file : " + path);
 
         return false;
     }
     else {
-        cout << "File open OK! " << path << endl;
+        SysQLogger::getLogger()->logOK("File open : " + path);
         return checkHeader();
     }
 }

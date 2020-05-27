@@ -1,6 +1,6 @@
 /* LICENSE TEXT
 
-    DmxPlayer for linux based using RtAudio and RtMidi libraries to
+    audioplayer for linux based using RtAudio and RtMidi libraries to
     process audio and receive MTC sync. It also uses oscpack to receive
     some configurations through osc commands.
     Copyright (C) 2020  Stage Lab & bTactic.
@@ -37,6 +37,8 @@
 
 using namespace std;
 namespace fs = filesystem;
+
+//////////////////////////////////////////////////////////
 class CommandLineParser
 {
     public:
@@ -47,36 +49,8 @@ class CommandLineParser
         const std::string getEndingFilename( void );
         bool optionExists( const std::string &option ) const;
 
-        bool endingFilename = false;
-
     private:
         std::vector <std::string> args;
 };
-
-//////////////////////////////////////////////////////////
-// USE EXAMPLE 
-/*
-int main(int argc, char **argv){
-
-    // Setting the parser
-    CommandLineParser input(argc, argv);
-
-    // Looking for a flag maybe?
-    if ( input.cmdOptionExists("-h") ) {
-        // Do stuff...
-
-    }
-    
-    // Looking for a parameter?
-    const std::string &filename = input.getCmdOption("-f");
-
-    if (!filename.empty()){
-        // Do interesting things...
-
-    }
-
-    return 0;
-}
-*/
 
 #endif // COMMANDLINEPARSER_CLASS_H

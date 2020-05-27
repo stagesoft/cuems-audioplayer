@@ -33,15 +33,15 @@
 ////////////////////////////////////////////
 // Initializing static class members
 
-double AudioPlayer::playHead = 0;
+long long int AudioPlayer::playHead = 0;
 bool AudioPlayer::followingMtc = true;
-bool AudioPlayer::isStreamRunning = false;
 bool AudioPlayer::endOfStream = false;
+bool AudioPlayer::endOfPlay = false;
 
 //////////////////////////////////////////////////////////
 AudioPlayer::AudioPlayer(   int port, 
-                            double initOffset,
-                            double finalWait,
+                            long int initOffset,
+                            long int finalWait,
                             const string oscRoute ,
                             const string filePath , 
                             const string uuid,
@@ -58,7 +58,6 @@ AudioPlayer::AudioPlayer(   int port,
                             deviceID(device),
                             audio(audioApi),
                             audioFile(filePath.c_str()),
-                            headOffset(initOffset),
                             endWaitTime(finalWait),
                             playerUuid(uuid),
                             stopOnMTCLost(stopOnLostFlag)
@@ -71,7 +70,18 @@ AudioPlayer::AudioPlayer(   int port,
     //////////////////////////////////////////////////////////
     // Set up working class members
 
+    // Audio frame size calc
+    audioFrameSize = nChannels * headStep;
+    audioSecondSize = sampleRate * audioFrameSize;
+    audioMillisecondSize = ( (float) sampleRate / 1000 ) * audioFrameSize;
 
+    // Adjust initial offset
+    //      NOTE: Hardcoded 50 ms offset while testing sync with Xjadeo
+    headOffset = initOffset + XJADEO_ADJUSTMENT * audioMillisecondSize;
+    headOffset += audioFile.headerSize;
+
+    if ( (playHead + headOffset) >= 0 )
+        audioFile.seekg( playHead + headOffset , ios_base::beg );
 
     // Per channel volume param to process audio
     volumeMaster = new float[nChannels];
@@ -79,13 +89,7 @@ AudioPlayer::AudioPlayer(   int port,
         volumeMaster[i] = 1.0;
     }
 
-    // File header read so initial offset
-    headOffset = audioFile.headerSize;
-
-    // Audio frame size calc
-    audioFrameSize = nChannels * headStep;
-    audioSecondSize = sampleRate * audioFrameSize;
-
+    // Per channel process buffer
     intermediate = new short int[nChannels];
 
 
@@ -94,17 +98,26 @@ AudioPlayer::AudioPlayer(   int port,
     // Check for audio devices
     try {
         if ( audio.getDeviceCount() == 0 ) {
-            std::cout << "No audio devices found on API:" << 
-                std::to_string(audio.getCurrentApi()) << endl << endl <<
-                "Maybe Jack Audio Kit is not running." << endl << endl;
+            std::string str = "No audio devices found on API:" + 
+                std::to_string(audio.getCurrentApi());
 
-            exit(EXIT_FAILURE);
+            std::cerr << str << endl;
+            SysQLogger::getLogger()->logER(str);
+
+            str = "Maybe JACK NOT RUNNING!!!";
+
+            std::cerr << str << endl;
+            SysQLogger::getLogger()->logER(str);
+
+            exit( SYSQ_EXIT_AUDIO_DEVICE_ERR );
         }
     }
     catch ( RtAudioError &error ) {
-        std::cout << error.getMessage();
+        std::cerr << error.getMessage();
+        SysQLogger::getLogger()->logER( error.getMessage() );
 
-        exit(EXIT_FAILURE);
+        SysQLogger::getLogger()->logIN( "Exiting with result code: " + std::to_string(SYSQ_EXIT_AUDIO_DEVICE_ERR) );
+        exit( SYSQ_EXIT_AUDIO_DEVICE_ERR );
     }
 
     // Get the default audio device and set stream parameters
@@ -115,8 +128,6 @@ AudioPlayer::AudioPlayer(   int port,
 
     RtAudio::StreamOptions streamOps;
     streamOps.streamName = "a" + to_string(oscPort) + playerUuid;
-
-    std::cout << "audioplayer UUID: " << streamOps.streamName << endl << endl;
 
     try {
         audio.openStream(  &streamParams, 
@@ -131,9 +142,11 @@ AudioPlayer::AudioPlayer(   int port,
         audio.startStream();
     }
     catch (RtAudioError &error) {
-        std::cout << error.getMessage();
+        std::cerr << error.getMessage();
+        SysQLogger::getLogger()->logER( error.getMessage() );
 
-        exit( EXIT_FAILURE );
+        SysQLogger::getLogger()->logIN( "Exiting with result code: " + std::to_string(SYSQ_EXIT_AUDIO_DEVICE_ERR) );
+        exit( SYSQ_EXIT_AUDIO_DEVICE_ERR );
     }
 
 
@@ -147,9 +160,9 @@ AudioPlayer::~AudioPlayer( void ) {
         // Stop the stream
         audio.abortStream();
     }
-    catch (RtAudioError& e) {
-        std::cout << e.getMessage();
-
+    catch (RtAudioError& error) {
+        std::cerr << error.getMessage();
+        SysQLogger::getLogger()->logER( error.getMessage() );
     }
 
     // Clean up
@@ -163,44 +176,78 @@ AudioPlayer::~AudioPlayer( void ) {
 }
 
 //////////////////////////////////////////////////////////
-// Midi callback - Static member function
+// RtAudio callback - Static member function
 int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsigned int nBufferFrames,
             double /*streamTime*/, RtAudioStreamStatus /*status*/, void *data ) {
 
     AudioPlayer *ap = (AudioPlayer*) data;
 
-    // If we are playing audio...
-    if (    ap->audioFile.good() && ! ap->audioFile.eof() &&
-            ap->mtcReceiver.isTimecodeRunning && 
-            ap->followingMtc ) {
-
+    // If we are receiving MTC and following it...
+    // Or we are not receiving it and we do not stop on its lost
+    if (    (ap->mtcReceiver.isTimecodeRunning && ap->followingMtc) || 
+            (ap->mtcSignalLost && !ap->stopOnMTCLost) ) {
         unsigned int count = 0;
         unsigned int read = 0;
 
-        ap->headMutex.lock();
-
-        double mtcHeadInBytes = ( ap->mtcReceiver.mtcHead / 1000 ) * (double) ap->audioSecondSize;
-
-        double difference = fabs( ap->playHead - mtcHeadInBytes );
-        double tollerance = 2 * (1 / (double) ap->mtcReceiver.curFrameRate ) * (double) ap->audioSecondSize;
-        
-        // If our audio play head is out of the boundaries of our mtc frame
-        // tollerance... We correct it.
-        //      - 2 MTC frames of tollerance
-        if ( difference > tollerance || ap->offsetChanged ) {
-            // Set new head
-            ap->playHead = mtcHeadInBytes;
-
-            // Set new offset if any
-            if ( ap->offsetChanged ) {
-                ap->headOffset = ap->headNewOffset;
-                ap->offsetChanged = false;
+        // Check play control flags
+        // If there is MTC signal and we haven't started, check it
+        if ( ap->mtcReceiver.isTimecodeRunning ) {
+            if ( !ap->mtcSignalStarted ) {
+                SysQLogger::getLogger()->logIN("MTC -> Play started");
+                ap->mtcSignalStarted = true;
+            }
+            else {
+                if ( ap->mtcSignalLost ) {
+                    SysQLogger::getLogger()->logIN("MTC -> Play resumed");
+                }
             }
 
-            // Seek the file with the new coordinates
-            ap->audioFile.seekg((streamoff)(ap->playHead + ap->headOffset), ios_base::beg);
+            // Receiving MTC, signal not lost anymore
+            ap->mtcSignalLost = false;
+        }
+        // Either, if there is no MTC signal and we already started, it is lost
+        else {
+            if ( ap->mtcSignalStarted && !ap->mtcSignalLost ) {
+                SysQLogger::getLogger()->logIN("MTC signal lost");
+                ap->mtcSignalLost = true;
+            }
         }
 
+        // Now we start playing in two different cases:
+        // 1) after MTC: if there is MTC signal then we treat it
+        if ( ap->mtcReceiver.isTimecodeRunning && ap->followingMtc && !ap->mtcSignalLost )
+        {
+            // Tollerance 2 frames, due to the MTC 8 packages -> 2 frames relay
+            long int tollerance = MTC_FRAMES_TOLLERANCE * ( 1000 / (float) ap->mtcReceiver.curFrameRate ) * ap->audioMillisecondSize;
+            
+            long int mtcHeadInBytes = ap->mtcReceiver.mtcHead * ap->audioMillisecondSize ;
+
+            long int difference = ap->playHead - mtcHeadInBytes;
+
+            // If our audio play head is too late or out of the boundaries of our mtc frame
+            // tollerance... We correct it. Also if the offset changed dinamically via OSC
+            if ( abs(difference) > tollerance || ap->offsetChanged ) {
+                // Set new head
+                ap->playHead = mtcHeadInBytes;
+
+                // Set new OSC offset if any
+                if ( ap->offsetChanged ) {
+                    ap->headOffset = ap->headNewOffset;
+                    // And reset flag
+                    ap->offsetChanged = false;
+                }
+
+                // Seek the file with the new coordinates
+                if ( ( (ap->playHead + ap->headOffset) >= 0 ) && 
+                        ( (ap->playHead + ap->headOffset) <= (long long) ap->audioFile.headerData.SubChunk2Size ) ){
+
+                    ap->endOfStream = false;
+                    ap->audioFile.seekg( ap->playHead + ap->headOffset , ios_base::beg );
+                }
+            }
+        }
+
+        // 2) without MTC: we do not treat it but, in any case, we continue playing
         for ( unsigned int i = 0; i < nBufferFrames; i++ ) {
             // Per channel reading
             read = 0;
@@ -208,126 +255,196 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
                 // Read operation to the intermediate buffer, we read the size of our 
                 // sample by the number of channels times, from file
                 // read += fread( &intermediate[i], 1, ap->headStep, file );
-                ap->audioFile.read((char*) &ap->intermediate[i], ap->headStep);
-                read += ap->audioFile.gcount();
+                if ( (ap->playHead + ap->headOffset) >= 0 ) {
+                    ap->audioFile.read((char*) &ap->intermediate[i], ap->headStep);
+                    read += ap->audioFile.gcount();
 
-                ap->intermediate[i] *= ap->volumeMaster[i];
+                    ap->intermediate[i] *= ap->volumeMaster[i];
+                }
+                else {
+                    ap->intermediate[i] = 0;
+
+                    read += ap->headStep;
+                }
 
             }
 
             memcpy((char *)outputBuffer + count, ap->intermediate, ap->audioFrameSize);
 
-            if ( read > 0 ) count += read; else break;
+            if ( read > 0 ) {
+                count += read;
+            }
+            else {
+                break;
+            }
         }
 
         ap->playHead += count;
 
-        ap->headMutex.unlock();
-
-        // If we didn't read enough butes to fill the buffer, let's put some
+        // If we didn't read enough bytes to fill the buffer, let's put some
         // silence aferwards copying zeros to the rest of the buffer
-        /*
+
         if ( count < nBufferFrames ) {
             unsigned long int bytes = (nBufferFrames - count) * ap->audioFrameSize;
             unsigned long int startByte = count * ap->audioFrameSize;
 
             memset( (char *)(outputBuffer) + startByte, 0, bytes );
 
-            ap->endOfStream = true;
-            return 1;
-        }
-        */
+            // Maybe it is the end of the stream
+            if ( ap->audioFile.bad() ) {
+                SysQLogger::getLogger()->logIN("File bad when reached end...");
+            }
 
-        if ( ap->audioFile.eof() ) {
-            ap->endOfStream = true;
+            if ( ap->endWaitTime == 0 ) {
+                // If there is not waiting time, we just finish
+                ap->endOfStream = true;
+                ap->endOfPlay = true;
+                return 1;
+            }
+            else {
+                if ( ap->endTimeStamp == 0 ) {
+                    ap->endTimeStamp = chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count();
+                    SysQLogger::getLogger()->logIN("End of stream reached, waiting...");
+                }
+
+                ap->endOfStream = true;
+                long int timecodeNow = chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count();
+
+                if ( ( timecodeNow - ap->endTimeStamp ) > ap->endWaitTime ) {
+                    SysQLogger::getLogger()->logIN("Waiting time reached, exiting audioplayer object");
+                    ap->endOfPlay = true;
+                    return 1;
+                }
+            }
+        }
+        else {
+            ap->endOfStream = false;
+            ap->endOfPlay = false;
+            ap->endTimeStamp = 0;
         }
     }
     // If we are not playing audio... Just copy silence...
-    else {
-        memset( (char *)(outputBuffer), 0, nBufferFrames * ap->audioFrameSize );
+    else
+    {
+        // Check play control flags
+        // if we already started and we have no MTC signal, and it was 
+        // already lost, it is lost now
+        if (    !ap->mtcReceiver.isTimecodeRunning && 
+                ap->mtcSignalStarted && 
+                !ap->mtcSignalLost ) {
+            SysQLogger::getLogger()->logIN("MTC signal lost");
+            ap->mtcSignalLost = true;
+        }
 
+        memset( (char *)(outputBuffer), 0, nBufferFrames * ap->audioFrameSize );
     }
+
+    // At the end, if we are following MTC but it is not running right now
+    // let's fix our head to MTC head now it's stopped
+    /*
+    if ( ! ap->mtcReceiver.isTimecodeRunning && ap->followingMtc ) {
+        ap->playHead = ap->mtcReceiver.mtcHead * ap->audioMillisecondSize;
+    }
+    */
 
     return 0;
 
 }
 
 ////////////////////////////////////////////
+// OSC process message callback
 void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m, 
             const IpEndpointName& /*remoteEndpoint*/ )
 {
-    // std::cout << m.AddressPattern();
     try{
         // Parsing OSC audioplayer messages
         // Volume channel 0
-        if ( std::strcmp( m.AddressPattern(), (OscReceiver::oscAddress + "/vol0").c_str() ) == 0 ) {
+        if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/vol0") ) {
             // osc::ReceivedMessageArgumentStream args = m.ArgumentStream();
             // args >> volumeMaster[0] >> osc::EndMessage;
             m.ArgumentStream() >> volumeMaster[0] >> osc::EndMessage;
+            SysQLogger::getLogger()->logIN("OSC: new volume channel 0 " + std::to_string(volumeMaster[0]));
             
         // Volume channel 1
-        } else if ( std::strcmp( m.AddressPattern(), (OscReceiver::oscAddress + "/vol1").c_str() ) == 0 ) {
+        } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/vol1") ) {
             // osc::ReceivedMessageArgumentStream args = m.ArgumentStream();
             // args >> volumeMaster[1] >> osc::EndMessage;
             m.ArgumentStream() >> volumeMaster[1] >> osc::EndMessage;
+            SysQLogger::getLogger()->logIN("OSC: new volume channel 1 " + std::to_string(volumeMaster[1]));
             
         // Volume master
-        } else if ( std::strcmp( m.AddressPattern(), (OscReceiver::oscAddress + "/volmaster").c_str() ) == 0 ) {
+        } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/volmaster") ) {
             // osc::ReceivedMessageArgumentStream args = m.ArgumentStream();
             // args >> volumeMaster[0] >> osc::EndMessage;
             m.ArgumentStream() >> volumeMaster[0] >> osc::EndMessage;
             volumeMaster[1] = volumeMaster[0];
+            SysQLogger::getLogger()->logIN("OSC: new volume master " + std::to_string(volumeMaster[0]));
 
         // Offset
-        } else if ( std::strcmp( m.AddressPattern(), (OscReceiver::oscAddress + "/offset").c_str() ) == 0 ) {
+        } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/offset") ) {
             // osc::ReceivedMessageArgumentStream args = m.ArgumentStream();
             // args >> volumeMaster[0] >> osc::EndMessage;
             float offsetOSC;
             m.ArgumentStream() >> offsetOSC >> osc::EndMessage;
+            offsetOSC = floor(offsetOSC);
+
+            SysQLogger::getLogger()->logIN("OSC: new offset value " + std::to_string((long int)offsetOSC));
 
             // Offset argument in OSC command is in milliseconds
             // so we need to calculate in bytes in our file
 
-            headNewOffset = offsetOSC / 1000;                     // To seconds
-            headNewOffset *= (double) audioSecondSize;  // To bytes
+            headNewOffset = ( offsetOSC + XJADEO_ADJUSTMENT ) * audioMillisecondSize;             // To bytes
 
             // Plus the standard header size
             headNewOffset += audioFile.headerSize;
 
             offsetChanged = true;
 
-        } else if ( std::strcmp( m.AddressPattern(), (OscReceiver::oscAddress + "/load").c_str() ) == 0 ) {
+        // Load
+        } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/load") ) {
             const char* newPath;
             m.ArgumentStream() >> newPath >> osc::EndMessage;
             audioPath = newPath;
-            std::cout << "audioPath : " << audioPath << endl;
+            SysQLogger::getLogger()->logIN("OSC: /load command");
             audioFile.close();
-            std::cout << "File closed" << endl;
-            audioFile.loadFile(audioPath.c_str());
-            std::cout << "loadFile Called" << endl;
-        } else if ( std::strcmp( m.AddressPattern(), (OscReceiver::oscAddress + "/play").c_str() ) == 0 ) {
+            SysQLogger::getLogger()->logIN("OSC: previous file closed");
+            audioFile.loadFile(audioPath);
+            SysQLogger::getLogger()->logIN("OSC: loaded new path -> " + audioPath);
+        // Play/pause
+        } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/play") ) {
             // TO DO
-        } else if ( std::strcmp( m.AddressPattern(), (OscReceiver::oscAddress + "/stop").c_str() ) == 0 ) {
+            SysQLogger::getLogger()->logIN("OSC: /play command");
+
+        // Stop
+        } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/stop") ) {
             // TO DO
-        /*} else if ( std::strcmp( m.AddressPattern(), (OscReceiver::oscAddress + "/quit").c_str() ) == 0 ) {
-            raise(SIGTERM);
-        } */
+            SysQLogger::getLogger()->logIN("OSC: /stop command");
+            
+        // Quit
         } else if ( (string)m.AddressPattern() == (OscReceiver::oscAddress + "/quit") ) {
+            SysQLogger::getLogger()->logIN("OSC: /quit command");
             raise(SIGTERM);
+        // Check
+        } else if ( (string)m.AddressPattern() == (OscReceiver::oscAddress + "/check") ) {
+            SysQLogger::getLogger()->logIN("OSC: /check command");
+            raise(SIGUSR1);
         }
         
-    } catch ( osc::Exception& e ) {
+    } catch ( osc::Exception& error ) {
         // any parsing errors such as unexpected argument types, or 
         // missing arguments get thrown as exceptions.
-        std::cout << "error while parsing message: "
-            << m.AddressPattern() << ": " << e.what() << "\n";
+        std::cerr << "Error while parsing OSC message: "
+            << m.AddressPattern() << ": " << error.what() << "\n";
+        SysQLogger::getLogger()->logER(  "OSC ERR : " + 
+                                        (std::string) m.AddressPattern() + 
+                                        ": " + (std::string) error.what() );
     }
 }
 
 //////////////////////////////////////////////////////////
 /*
 bool AudioPlayer::loadNodeConfig( void ) {
-    cout << "Node config read!" << endl;
+    cerr << "Node config read!" << endl;
     return true;
 }
 */
@@ -335,16 +452,8 @@ bool AudioPlayer::loadNodeConfig( void ) {
 //////////////////////////////////////////////////////////
 /*
 bool AudioPlayer::loadMediaConfig( void ) {
-    cout << "Media config read!" << endl;
+    cerr << "Media config read!" << endl;
     return true;
-}
-*/
-
-//////////////////////////////////////////////////////////
-// Logging to be implemented later
-/*
-void AudioPlayer::log( std::string* message ) {
-    std::cout << *message << endl;
 }
 */
 

@@ -31,17 +31,28 @@
 #include "main.h"
 
 using namespace std;
-namespace fs = filesystem;
+namespace fs = std::filesystem;
 
 //////////////////////////////////////////////////////////
 // Initializing static class members and global vars
 AudioPlayer* myAudioPlayer = NULL;
+SysQLogger* logger = NULL;
 
 //////////////////////////////////////////////////////////
 // Main application function
 int main( int argc, char *argv[] ) {
 
     signal(SIGTERM, sigTermHandler);
+    signal(SIGUSR1, sigUsr1Handler);
+    signal(SIGINT, sigIntHandler);
+
+    // We instantiate here our singleton logger object to be accessed
+    // via the SysQLogger::getLogger() function across the app
+    logger = new SysQLogger( "/home/calamar/sysq/log/audioplayers.log", "audioplayer" );
+
+    if ( !logger->isLogOpen() ) {
+        std::cerr << "Could not open the log." << endl << endl;
+    }
 
     //////////////////////////////////////////////////////////
     // Parse command line
@@ -49,7 +60,9 @@ int main( int argc, char *argv[] ) {
         showcopyright();        
         showusage();
         
-        exit( EXIT_FAILURE );
+       logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+
+        exit( SYSQ_EXIT_WRONG_PARAMETERS );
     }
 
     // If there is at least one we parse the command line
@@ -69,15 +82,15 @@ int main( int argc, char *argv[] ) {
             showcopydisclaimer();
         }
 
-        exit( EXIT_FAILURE );
+        logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+
+        exit( SYSQ_EXIT_WRONG_PARAMETERS );
     }
 
     // --file or -f command parse and filename retreival and check
     fs::path filePath;
     // retreival
-    if ( argParser.endingFilename ) {
-        filePath = argParser.getEndingFilename();
-    } else if ( argParser.optionExists("--file") || argParser.optionExists("-f") ) {
+    if ( argParser.optionExists("--file") || argParser.optionExists("-f") ) {
         filePath = argParser.getParam("--file");
 
         if ( filePath.empty() ) filePath = argParser.getParam("-f");
@@ -86,19 +99,22 @@ int main( int argc, char *argv[] ) {
             // Not file path specified after file option
             std::cout << "File not specified after --file or -f option." << endl;
 
-            exit( EXIT_FAILURE );
+            logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_DATA_FILE) );
+
+            exit( SYSQ_EXIT_WRONG_DATA_FILE );
         }
     }
+    else {
+        filePath = argParser.getEndingFilename();
+    }
     // check
-    if ( !filePath.empty() && filePath.is_relative() ) {
-        filePath = fs::absolute( filePath );
-
-        if ( !fs::exists(filePath) ) {
+    if ( !filePath.empty() && !fs::exists(filePath) ) {
             // File does not exist
             std::cout << "Unable to locate file: " << filePath << endl;
 
-            exit( EXIT_FAILURE );
-        }
+            logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_DATA_FILE) );
+
+            exit( SYSQ_EXIT_WRONG_DATA_FILE );
     }
 
     // --port or -p command parse and port number retreival and check
@@ -113,7 +129,9 @@ int main( int argc, char *argv[] ) {
             // Not valid port number specified after port option
             std::cout << "Not valid port number after --port or -p option." << endl;
 
-            exit( EXIT_FAILURE );
+            logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+
+            exit( SYSQ_EXIT_WRONG_PARAMETERS );
         }
         else {
             portNumber = std::stoi( portParam );
@@ -132,7 +150,9 @@ int main( int argc, char *argv[] ) {
             // Not valid port number specified after port option
             std::cout << "Not valid offset integer after --offset or -o option." << endl;
 
-            exit( EXIT_FAILURE );
+            logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+
+            exit( SYSQ_EXIT_WRONG_PARAMETERS );
         }
         else {
             offsetMilliseconds = std::stoi( offsetParam );
@@ -151,7 +171,9 @@ int main( int argc, char *argv[] ) {
             // Not valid port number specified after port option
             std::cout << "Not valid wait integer after --wait or -w option." << endl;
 
-            exit( EXIT_FAILURE );
+            logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+
+            exit( SYSQ_EXIT_WRONG_PARAMETERS );
         }
         else {
             endWaitMilliseconds = std::stoi( waitParam );
@@ -170,7 +192,9 @@ int main( int argc, char *argv[] ) {
             // Not valid port number specified after port option
             std::cout << "Not valid uuid string after --uuid or -u option." << endl;
 
-            exit( EXIT_FAILURE );
+            logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+
+            exit( SYSQ_EXIT_WRONG_PARAMETERS );
         }
         else {
             processUuid = uuidParam ;
@@ -188,42 +212,60 @@ int main( int argc, char *argv[] ) {
     //////////////////////////////////////////////////////////
 
 
+    // Now that we now a more detailed information on the specific player
+    // we change the logger slug to reflect this identification on the logs
+    logger->setNewSlug("a" + std::to_string(portNumber) + processUuid); 
+
 
     if ( filePath.empty() || portNumber == 0 ) {
         std::cout << "Wrong parameters! Check usage..." << endl << endl;
         showcopyright();
         showusage();
 
-        exit ( EXIT_FAILURE );
+        logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+
+        exit ( SYSQ_EXIT_WRONG_PARAMETERS );
     }
     else {
         myAudioPlayer = new AudioPlayer(    portNumber, 
-                                            (double) offsetMilliseconds, 
-                                            (double) endWaitMilliseconds, 
+                                            offsetMilliseconds, 
+                                            endWaitMilliseconds, 
                                             "", 
                                             filePath.c_str(),
                                             processUuid,
                                             stopOnLostFlag );
+
+        logger->logOK("AudioPlayer object created OK!");
     }
 
+    // Micro pause to let everything get in place
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-    std::cout << "Starting object with " << myAudioPlayer->nChannels << " channels" <<
-        " at " << myAudioPlayer->sampleRate << " samples/sec" <<
-        " on device number " << myAudioPlayer->deviceID << endl;
+    string str;
+    str = "Starting object with " + std::to_string(myAudioPlayer->nChannels) + " channels" +
+        " at " + std::to_string(myAudioPlayer->sampleRate) + " samples/sec" +
+        " on device number " + std::to_string(myAudioPlayer->deviceID);
 
-    std::cout << "- Osc path : " << myAudioPlayer->getOscAddress() << endl ;
-    std::cout << "- Audio File : " << myAudioPlayer->audioPath << endl << endl;
+    std::cout << str << endl;
+    logger->logOK(str);
 
     //////////////////////////////////////////////////////////
-    // Clear screen
-    // cout << "\033[2J";
+    // We are running!! Let's check the USR1 signal handler
+    // to let everyone know that we are running
+    sigUsr1Handler( SIGUSR1 );
 
     //////////////////////////////////////////////////////////
     // Wait for it to finnish somehow
-    while ( !myAudioPlayer->endOfStream ) {
+    while ( !myAudioPlayer->endOfPlay ) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+
+    logger->logIN( "End of playing reached, finishing" );
+
+    logger->logIN( "Exiting with result code: " + std::to_string( EXIT_SUCCESS ) );
+
+    // Cleaning
+    delete logger;
 
 }
 
@@ -294,11 +336,44 @@ void showusage( void ) {
 //////////////////////////////////////////////////////////
 void sigTermHandler( int signum ) {
 
-    std::cout << endl << endl << "SIGTERM received! Finishing." << endl << endl;
+    std::string str = "SIGTERM received! Finishing.";
+    cout << endl << endl << str << endl << endl;
 
-    delete myAudioPlayer;
+    logger->getLogger()->logIN( str );
+
+    if ( myAudioPlayer != NULL )
+        delete myAudioPlayer;
+
+    if ( logger != NULL )
+        delete logger;
+
+    logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(signum) );
 
     exit(signum);
 
 }
 
+//////////////////////////////////////////////////////////
+void sigUsr1Handler( int /* signum */  ) {
+    std::string str = "RUNNING!";
+    std::cout << "[" << logger->getSlug() << "] [OK] " << str << endl;
+    logger->getLogger()->logOK( str );
+}
+
+//////////////////////////////////////////////////////////
+void sigIntHandler( int signum ) {
+    logger->getLogger()->logIN( "SIGINT received!" );
+
+    if ( myAudioPlayer != NULL )
+        delete myAudioPlayer;
+
+    if ( logger != NULL )
+        delete logger;
+
+    logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(signum) );
+
+    std::cout << endl;
+
+    exit(signum);
+
+}

@@ -1,6 +1,6 @@
 /* LICENSE TEXT
 
-    DmxPlayer for linux based using RtAudio and RtMidi libraries to
+    audioplayer for linux based using RtAudio and RtMidi libraries to
     process audio and receive MTC sync. It also uses oscpack to receive
     some configurations through osc commands.
     Copyright (C) 2020  Stage Lab & bTactic.
@@ -35,8 +35,6 @@ CommandLineParser::CommandLineParser (int &argc, char **argv) {
     for ( int i = 1; i < argc; ++i ) {
         this->args.push_back( std::string(argv[i]) );
     }
-
-    if ( (argc % 2) == 0 ) endingFilename = true;
 }
 
 //////////////////////////////////////////////////////////

@@ -33,6 +33,8 @@
 #include <filesystem>
 #include "commandlineparser_class.h"
 #include "audioplayer_class.h"
+#include "sysqlogger_class.h"
+#include "sysq_errors.h"
 
 //////////////////////////////////////////////////////////
 // Functions declarations
@@ -41,4 +43,8 @@ void showcopyright( void );
 void showusage( void );
 void showwarrantydisclaimer( void );
 void showcopydisclaimer( void );
+
+// System signal handlers
 void sigTermHandler( int signum );
+void sigUsr1Handler( int signum );
+void sigIntHandler( int signum );
