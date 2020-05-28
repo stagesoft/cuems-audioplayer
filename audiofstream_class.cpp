@@ -40,7 +40,7 @@ AudioFstream::AudioFstream( const string filename,
 {
     if ( bad() ) {
         std::cerr << "Unable to find or open file!" << endl;
-        SysQLogger::getLogger()->logER("Couldn't open file : " + filename);
+        SysQLogger::getLogger()->logError("Couldn't open file : " + filename);
     }
     else {
         SysQLogger::getLogger()->logOK("File open OK! : " + filename);
@@ -116,7 +116,7 @@ bool AudioFstream::checkHeader( void ) {
         else {
             std::string str = "Wrong WAV header!!! " + std::to_string(bytesRead) + " bytes read";
             std::cerr <<  str << endl;
-            SysQLogger::getLogger()->logER(str);
+            SysQLogger::getLogger()->logError(str);
         }
     }
 
@@ -129,7 +129,7 @@ bool AudioFstream::loadFile( const string path ) {
 
     if ( bad() ) {
         std::cerr << "Unable to find or open file!" << endl;
-        SysQLogger::getLogger()->logER("Couldn't open file : " + path);
+        SysQLogger::getLogger()->logError("Couldn't open file : " + path);
 
         return false;
     }

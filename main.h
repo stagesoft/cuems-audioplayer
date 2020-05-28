@@ -33,7 +33,7 @@
 #include <filesystem>
 #include "commandlineparser_class.h"
 #include "audioplayer_class.h"
-#include "sysqlogger_class.h"
+#include "./sysqlogger_class/sysqlogger_class.h"
 #include "sysq_errors.h"
 
 //////////////////////////////////////////////////////////

@@ -52,7 +52,7 @@
 #include <rtaudio/RtAudio.h>
 #include <rtmidi/RtMidi.h>
 #include "audiofstream_class.h"
-#include "sysqlogger_class.h"
+#include "./sysqlogger_class/sysqlogger_class.h"
 #include "sysq_errors.h"
 #include "./mtcreceiver_class/mtcreceiver_class.h"
 #include "./oscreceiver_class/oscreceiver_class.h"

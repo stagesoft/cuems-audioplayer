@@ -15,8 +15,14 @@ LBLIBS = -lrtaudio -lrtmidi -lpthread -lstdc++fs \
 			./oscreceiver_class/oscpack/osc/OscReceivedElements.o \
 			./oscreceiver_class/oscpack/ip/posix/UdpSocket.o
 
+OSCPACKLIBS = 
+
 TARGET := audioplayer
-SRC := $(SRC_DIR)$(wildcard *.cpp) $(wildcard ./oscreceiver_class/*.cpp) $(wildcard ./mtcreceiver_class/*.cpp)
+SRC := $(wildcard *.cpp) \
+			$(wildcard ./oscreceiver_class/*.cpp) \
+			$(wildcard ./mtcreceiver_class/*.cpp) \
+			$(wildcard ./sysqlogger_class/*.cpp) \
+
 INC := $(wildcard *.h)
 OBJ := $(SRC:.cpp=.o)
 
@@ -32,8 +38,13 @@ debug: target
 
 target: $(TARGET)
 
-$(TARGET): $(OBJ)
+$(TARGET): $(OBJ) oscpack
 	$(CXX) $(OBJ) -o $@ $(LBLIBS)
+
+oscpack:
+	@echo Checking oscpack objects to be built
+	@cd oscreceiver_class/oscpack/ 1> /dev/null && make -i 1> /dev/null
+	@cd ../.. 1> /dev/null
 
 wipe:
 	@clear

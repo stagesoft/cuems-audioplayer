@@ -33,7 +33,7 @@
 #include <iostream>
 #include <fstream>
 #include <iomanip>
-#include "sysqlogger_class.h"
+#include "./sysqlogger_class/sysqlogger_class.h"
 #include "sysq_errors.h"
 
 using namespace std;

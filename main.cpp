@@ -48,11 +48,7 @@ int main( int argc, char *argv[] ) {
 
     // We instantiate here our singleton logger object to be accessed
     // via the SysQLogger::getLogger() function across the app
-    logger = new SysQLogger( "/home/calamar/sysq/log/audioplayers.log", "audioplayer" );
-
-    if ( !logger->isLogOpen() ) {
-        std::cerr << "Could not open the log." << endl << endl;
-    }
+    logger = new SysQLogger( "audioplayer" );
 
     //////////////////////////////////////////////////////////
     // Parse command line
@@ -60,7 +56,7 @@ int main( int argc, char *argv[] ) {
         showcopyright();        
         showusage();
         
-       logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+        logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
 
         exit( SYSQ_EXIT_WRONG_PARAMETERS );
     }
@@ -82,7 +78,7 @@ int main( int argc, char *argv[] ) {
             showcopydisclaimer();
         }
 
-        logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+        logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
 
         exit( SYSQ_EXIT_WRONG_PARAMETERS );
     }
@@ -99,7 +95,7 @@ int main( int argc, char *argv[] ) {
             // Not file path specified after file option
             std::cout << "File not specified after --file or -f option." << endl;
 
-            logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_DATA_FILE) );
+            logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_DATA_FILE) );
 
             exit( SYSQ_EXIT_WRONG_DATA_FILE );
         }
@@ -112,7 +108,7 @@ int main( int argc, char *argv[] ) {
             // File does not exist
             std::cout << "Unable to locate file: " << filePath << endl;
 
-            logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_DATA_FILE) );
+            logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_DATA_FILE) );
 
             exit( SYSQ_EXIT_WRONG_DATA_FILE );
     }
@@ -129,7 +125,7 @@ int main( int argc, char *argv[] ) {
             // Not valid port number specified after port option
             std::cout << "Not valid port number after --port or -p option." << endl;
 
-            logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+            logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
 
             exit( SYSQ_EXIT_WRONG_PARAMETERS );
         }
@@ -150,7 +146,7 @@ int main( int argc, char *argv[] ) {
             // Not valid port number specified after port option
             std::cout << "Not valid offset integer after --offset or -o option." << endl;
 
-            logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+            logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
 
             exit( SYSQ_EXIT_WRONG_PARAMETERS );
         }
@@ -171,7 +167,7 @@ int main( int argc, char *argv[] ) {
             // Not valid port number specified after port option
             std::cout << "Not valid wait integer after --wait or -w option." << endl;
 
-            logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+            logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
 
             exit( SYSQ_EXIT_WRONG_PARAMETERS );
         }
@@ -192,7 +188,7 @@ int main( int argc, char *argv[] ) {
             // Not valid port number specified after port option
             std::cout << "Not valid uuid string after --uuid or -u option." << endl;
 
-            logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+            logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
 
             exit( SYSQ_EXIT_WRONG_PARAMETERS );
         }
@@ -222,7 +218,7 @@ int main( int argc, char *argv[] ) {
         showcopyright();
         showusage();
 
-        logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+        logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
 
         exit ( SYSQ_EXIT_WRONG_PARAMETERS );
     }
@@ -260,9 +256,9 @@ int main( int argc, char *argv[] ) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    logger->logIN( "End of playing reached, finishing" );
+    logger->logInfo( "End of playing reached, finishing" );
 
-    logger->logIN( "Exiting with result code: " + std::to_string( EXIT_SUCCESS ) );
+    logger->logInfo( "Exiting with result code: " + std::to_string( EXIT_SUCCESS ) );
 
     // Cleaning
     delete logger;
@@ -339,7 +335,7 @@ void sigTermHandler( int signum ) {
     std::string str = "SIGTERM received! Finishing.";
     cout << endl << endl << str << endl << endl;
 
-    logger->getLogger()->logIN( str );
+    logger->getLogger()->logInfo( str );
 
     if ( myAudioPlayer != NULL )
         delete myAudioPlayer;
@@ -347,7 +343,7 @@ void sigTermHandler( int signum ) {
     if ( logger != NULL )
         delete logger;
 
-    logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(signum) );
+    logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(signum) );
 
     exit(signum);
 
@@ -362,7 +358,7 @@ void sigUsr1Handler( int /* signum */  ) {
 
 //////////////////////////////////////////////////////////
 void sigIntHandler( int signum ) {
-    logger->getLogger()->logIN( "SIGINT received!" );
+    logger->getLogger()->logInfo( "SIGINT received!" );
 
     if ( myAudioPlayer != NULL )
         delete myAudioPlayer;
@@ -370,7 +366,7 @@ void sigIntHandler( int signum ) {
     if ( logger != NULL )
         delete logger;
 
-    logger->getLogger()->logIN( "Exiting with result code: " + std::to_string(signum) );
+    logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(signum) );
 
     std::cout << endl;
 

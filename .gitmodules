@@ -4,3 +4,6 @@
 [submodule "oscreceiver_class"]
 	path = oscreceiver_class
 	url = https://github.com/stagesoft/oscreceiver_class.git
+[submodule "sysqlogger_class"]
+	path = sysqlogger_class
+	url = https://github.com/stagesoft/sysqlogger_class.git
