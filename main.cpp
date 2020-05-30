@@ -56,7 +56,7 @@ int main( int argc, char *argv[] ) {
         showcopyright();        
         showusage();
         
-        logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+        logger->getLogger()->logError( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
 
         exit( SYSQ_EXIT_WRONG_PARAMETERS );
     }
@@ -78,7 +78,7 @@ int main( int argc, char *argv[] ) {
             showcopydisclaimer();
         }
 
-        logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+        logger->getLogger()->logError( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
 
         exit( SYSQ_EXIT_WRONG_PARAMETERS );
     }
@@ -95,7 +95,7 @@ int main( int argc, char *argv[] ) {
             // Not file path specified after file option
             std::cout << "File not specified after --file or -f option." << endl;
 
-            logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_DATA_FILE) );
+            logger->getLogger()->logError( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_DATA_FILE) );
 
             exit( SYSQ_EXIT_WRONG_DATA_FILE );
         }
@@ -108,7 +108,7 @@ int main( int argc, char *argv[] ) {
             // File does not exist
             std::cout << "Unable to locate file: " << filePath << endl;
 
-            logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_DATA_FILE) );
+            logger->getLogger()->logError( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_DATA_FILE) );
 
             exit( SYSQ_EXIT_WRONG_DATA_FILE );
     }
@@ -125,7 +125,7 @@ int main( int argc, char *argv[] ) {
             // Not valid port number specified after port option
             std::cout << "Not valid port number after --port or -p option." << endl;
 
-            logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+            logger->getLogger()->logError( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
 
             exit( SYSQ_EXIT_WRONG_PARAMETERS );
         }
@@ -146,7 +146,7 @@ int main( int argc, char *argv[] ) {
             // Not valid port number specified after port option
             std::cout << "Not valid offset integer after --offset or -o option." << endl;
 
-            logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+            logger->getLogger()->logError( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
 
             exit( SYSQ_EXIT_WRONG_PARAMETERS );
         }
@@ -167,12 +167,15 @@ int main( int argc, char *argv[] ) {
             // Not valid port number specified after port option
             std::cout << "Not valid wait integer after --wait or -w option." << endl;
 
-            logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+            logger->getLogger()->logError( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
 
             exit( SYSQ_EXIT_WRONG_PARAMETERS );
         }
         else {
-            endWaitMilliseconds = std::stoi( waitParam );
+            if (std::stoi( waitParam ) == -1)
+                endWaitMilliseconds = __LONG_MAX__;
+            else
+                endWaitMilliseconds = std::stoi( waitParam );
         }
     }
 
@@ -188,7 +191,7 @@ int main( int argc, char *argv[] ) {
             // Not valid port number specified after port option
             std::cout << "Not valid uuid string after --uuid or -u option." << endl;
 
-            logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+            logger->getLogger()->logError( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
 
             exit( SYSQ_EXIT_WRONG_PARAMETERS );
         }
@@ -218,7 +221,7 @@ int main( int argc, char *argv[] ) {
         showcopyright();
         showusage();
 
-        logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+        logger->getLogger()->logError( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
 
         exit ( SYSQ_EXIT_WRONG_PARAMETERS );
     }
@@ -257,10 +260,10 @@ int main( int argc, char *argv[] ) {
     }
 
     logger->logInfo( "End of playing reached, finishing" );
-
     logger->logInfo( "Exiting with result code: " + std::to_string( EXIT_SUCCESS ) );
 
     // Cleaning
+    delete myAudioPlayer;
     delete logger;
 
 }

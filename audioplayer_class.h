@@ -36,7 +36,7 @@
 // #define __LINUX_ALSA__
 // #define __UNIX_JACK__
 #ifndef XJADEO_ADJUSTMENT
-#define XJADEO_ADJUSTMENT 65
+#define XJADEO_ADJUSTMENT 0
 #endif
 #ifndef MTC_FRAMES_TOLLERANCE
 #define MTC_FRAMES_TOLLERANCE 2
@@ -83,9 +83,6 @@ class AudioPlayer : public OscReceiver
         // Audio sample data
         string audioPath;
 
-        // Audio stream settings
-        // RtAudio::StreamParameters streamParams;         // Stream parameters
-        // unsigned int audioApi;                       // Our selected Audio API
         unsigned int nChannels;                         // Our default number of audio channels
         unsigned int sampleRate;                        // Our sample rate
         unsigned int bufferFrames;                      // 2048 sample frames
@@ -95,25 +92,27 @@ class AudioPlayer : public OscReceiver
         unsigned int audioSecondSize;                   // Audio second size in bytes
         unsigned int audioMillisecondSize;              // Audio millisecond size in bytes
 
-        short int* intermediate;
-        float* volumeMaster;             // Volumen master multiplier TODO: per channel
+        short int* intermediate;                        // Audio samples intermediate buffer
+        float* volumeMaster;                            // Volumen master multiplier
 
-        // Our midi and audio objects
+        // Our midi, osc and audio objects
         RtAudio audio;
         MtcReceiver mtcReceiver;
         AudioFstream audioFile;
 
-        // Stream and playing control vars
+        // Stream and playing control flags and vars
         static bool endOfStream;                // Is the end of the stream reached already?
         static bool endOfPlay;                  // Are we done playing and waiting?
+        static bool outOfFile;                  // Is our head out of our file boundaries?
         long int endTimeStamp = 0;              // Our finish timestamp to calculate end wait
         static bool followingMtc;               // Is player following MTC?
 
-        static long long int playHead;          // Current reading head position in bytes
+        // Playing head vars and flags
+        static std::atomic<long long int> playHead; // Current reading head position in bytes
 
         // float headSpeed;                       // Head speed (TO DO)
         // float headAccel;                       // Head acceleration (TO DO)
-        // std::atomic<double> playheadControl;   // Head reading direction, (TO DO)
+        std::atomic<int> playheadControl = 1;       // Head reading direction
 
         unsigned int headStep = 2;              // Head step per channel, by now SINT16 format, 2 bytes
         long int headOffset = 0;                // Head offset

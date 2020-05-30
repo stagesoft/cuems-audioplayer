@@ -33,10 +33,11 @@
 ////////////////////////////////////////////
 // Initializing static class members
 
-long long int AudioPlayer::playHead = 0;
+std::atomic<long long int> AudioPlayer::playHead(0);
 bool AudioPlayer::followingMtc = true;
 bool AudioPlayer::endOfStream = false;
 bool AudioPlayer::endOfPlay = false;
+bool AudioPlayer::outOfFile = false;
 
 //////////////////////////////////////////////////////////
 AudioPlayer::AudioPlayer(   int port, 
@@ -77,9 +78,11 @@ AudioPlayer::AudioPlayer(   int port,
 
     // Adjust initial offset
     //      NOTE: Hardcoded 50 ms offset while testing sync with Xjadeo
-    headOffset = initOffset + XJADEO_ADJUSTMENT * audioMillisecondSize;
+    headOffset = (initOffset + XJADEO_ADJUSTMENT) * audioMillisecondSize;
     headOffset += audioFile.headerSize;
 
+    // If we have a positive offset initialli we can already
+    // seek the file to its proper initial position
     if ( (playHead + headOffset) >= 0 )
         audioFile.seekg( playHead + headOffset , ios_base::beg );
 
@@ -154,8 +157,6 @@ AudioPlayer::AudioPlayer(   int port,
 
 //////////////////////////////////////////////////////////
 AudioPlayer::~AudioPlayer( void ) {
-    std::string message;
-
     try {
         // Stop the stream
         audio.abortStream();
@@ -166,13 +167,11 @@ AudioPlayer::~AudioPlayer( void ) {
     }
 
     // Clean up
-    // fclose(data.fd);
     audio.closeStream();
 
     // Delete dinamically reserved members
     delete []volumeMaster;
     delete []intermediate;
-
 }
 
 //////////////////////////////////////////////////////////
@@ -184,8 +183,10 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
 
     // If we are receiving MTC and following it...
     // Or we are not receiving it and we do not stop on its lost
-    if (    (ap->mtcReceiver.isTimecodeRunning && ap->followingMtc) || 
-            (ap->mtcSignalLost && !ap->stopOnMTCLost) ) {
+    // And we haven't reached the end of the file...
+    if (    ( (ap->mtcReceiver.isTimecodeRunning && ap->followingMtc) || 
+            (ap->mtcSignalLost && !ap->stopOnMTCLost) ) &&
+            ap->playheadControl == 1 ) {
         unsigned int count = 0;
         unsigned int read = 0;
 
@@ -202,7 +203,7 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
                 }
             }
 
-            // Receiving MTC, signal not lost anymore
+            // Receiving MTC, means that signal is not lost anymore
             ap->mtcSignalLost = false;
         }
         // Either, if there is no MTC signal and we already started, it is lost
@@ -235,6 +236,7 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
                     ap->headOffset = ap->headNewOffset;
                     // And reset flag
                     ap->offsetChanged = false;
+                    ap->outOfFile = true;
                 }
 
                 // Seek the file with the new coordinates
@@ -242,76 +244,95 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
                         ( (ap->playHead + ap->headOffset) <= (long long) ap->audioFile.headerData.SubChunk2Size ) ){
 
                     ap->endOfStream = false;
+                    ap->outOfFile = false;
                     ap->audioFile.seekg( ap->playHead + ap->headOffset , ios_base::beg );
                 }
+                else {
+                    if ( ap->audioFile.eof() ) ap->audioFile.clear();
+                    ap->endOfStream = true;
+                    ap->outOfFile = true;
+                }
+
             }
         }
 
         // 2) without MTC: we do not treat it but, in any case, we continue playing
-        for ( unsigned int i = 0; i < nBufferFrames; i++ ) {
-            // Per channel reading
-            read = 0;
-            for ( unsigned int i = 0; i < ap->nChannels; i++) {
-                // Read operation to the intermediate buffer, we read the size of our 
-                // sample by the number of channels times, from file
-                // read += fread( &intermediate[i], 1, ap->headStep, file );
-                if ( (ap->playHead + ap->headOffset) >= 0 ) {
-                    ap->audioFile.read((char*) &ap->intermediate[i], ap->headStep);
-                    read += ap->audioFile.gcount();
+        //      while we are not out of the file boundaries
+        if ( !ap->outOfFile ) {
+            for ( unsigned int i = 0; i < nBufferFrames; i++ ) {
+                // Per channel reading
+                read = 0;
+                for ( unsigned int i = 0; i < ap->nChannels; i++) {
+                    // Read operation to the intermediate buffer, we read the size of our 
+                    // sample by the number of channels times, from file
+                    // read += fread( &intermediate[i], 1, ap->headStep, file );
+                    if ( (ap->playHead + ap->headOffset) >= 0 ) {
+                        ap->audioFile.read((char*) &ap->intermediate[i], ap->headStep);
+                        read += ap->audioFile.gcount();
 
-                    ap->intermediate[i] *= ap->volumeMaster[i];
+                        ap->intermediate[i] *= ap->volumeMaster[i];
+                    }
+                    else {
+                        ap->intermediate[i] = 0;
+
+                        read += ap->headStep;
+                    }
+
                 }
-                else {
-                    ap->intermediate[i] = 0;
 
-                    read += ap->headStep;
-                }
+                memcpy((char *)outputBuffer + count, ap->intermediate, ap->audioFrameSize);
 
-            }
-
-            memcpy((char *)outputBuffer + count, ap->intermediate, ap->audioFrameSize);
-
-            if ( read > 0 ) {
                 count += read;
-            }
-            else {
-                break;
-            }
-        }
 
-        ap->playHead += count;
+                if ( read == 0 ) {
+                    break;
+                }
+            }
+
+            ap->playHead += count;
+        }
 
         // If we didn't read enough bytes to fill the buffer, let's put some
         // silence aferwards copying zeros to the rest of the buffer
-
         if ( count < nBufferFrames ) {
             unsigned long int bytes = (nBufferFrames - count) * ap->audioFrameSize;
             unsigned long int startByte = count * ap->audioFrameSize;
 
             memset( (char *)(outputBuffer) + startByte, 0, bytes );
 
-            // Maybe it is the end of the stream
-            if ( ap->audioFile.bad() ) {
-                SysQLogger::getLogger()->logInfo("File bad when reached end...");
-            }
+            ap->outOfFile = true;
+        }
 
+        // If we did not read anything, we are out of boundaries, maybe...
+        if ( count == 0 ) {
+            // Maybe it is the end of the stream
             if ( ap->endWaitTime == 0 ) {
                 // If there is not waiting time, we just finish
+                // and we end the stream by returning a positive value
                 ap->endOfStream = true;
                 ap->endOfPlay = true;
                 return 1;
             }
             else {
+                // If we have waiting time set...
                 if ( ap->endTimeStamp == 0 ) {
+                    // We note down our timestamp
                     ap->endTimeStamp = chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count();
-                    SysQLogger::getLogger()->logInfo("End of stream reached, waiting...");
+
+                    std::string str;
+                    if ( ap->endWaitTime == __LONG_MAX__ ) 
+                        str = "for quit command";
+                    else
+                        str = std::to_string( ap->endWaitTime ) + " ms";
+
+                    SysQLogger::getLogger()->logInfo("Out of file boundaries, waiting " + str);
                 }
 
                 ap->endOfStream = true;
                 long int timecodeNow = chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count();
 
                 if ( ( timecodeNow - ap->endTimeStamp ) > ap->endWaitTime ) {
-                    SysQLogger::getLogger()->logInfo("Waiting time reached, exiting audioplayer object");
+                    SysQLogger::getLogger()->logInfo("Waiting time exceded, ending audioplayer");
                     ap->endOfPlay = true;
                     return 1;
                 }
@@ -321,6 +342,7 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
             ap->endOfStream = false;
             ap->endOfPlay = false;
             ap->endTimeStamp = 0;
+            ap->outOfFile = false;
         }
     }
     // If we are not playing audio... Just copy silence...
@@ -400,6 +422,17 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
 
             offsetChanged = true;
 
+        // Wait
+        } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/wait") ) {
+            // osc::ReceivedMessageArgumentStream args = m.ArgumentStream();
+            // args >> volumeMaster[0] >> osc::EndMessage;
+            float waitOSC;
+            m.ArgumentStream() >> waitOSC >> osc::EndMessage;
+            waitOSC = floor(waitOSC);
+
+            SysQLogger::getLogger()->logInfo("OSC: new end wait value " + std::to_string((long int)waitOSC));
+
+            endWaitTime = waitOSC;             // In milliseconds
         // Load
         } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/load") ) {
             const char* newPath;
@@ -412,14 +445,20 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
             SysQLogger::getLogger()->logInfo("OSC: loaded new path -> " + audioPath);
         // Play/pause
         } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/play") ) {
-            // TO DO
             SysQLogger::getLogger()->logInfo("OSC: /play command");
-
+            if ( playheadControl != 0 )
+                playheadControl = 0;
+            else 
+                playheadControl = 1;
         // Stop
         } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/stop") ) {
-            // TO DO
+            // TO DO : right now is the same as play/pause... Don't know if there 
+            //          will be other implementations of the command...
             SysQLogger::getLogger()->logInfo("OSC: /stop command");
-            
+            if ( playheadControl != 0 )
+                playheadControl = 0;
+            else 
+                playheadControl = 1;
         // Quit
         } else if ( (string)m.AddressPattern() == (OscReceiver::oscAddress + "/quit") ) {
             SysQLogger::getLogger()->logInfo("OSC: /quit command");
@@ -428,13 +467,17 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
         } else if ( (string)m.AddressPattern() == (OscReceiver::oscAddress + "/check") ) {
             SysQLogger::getLogger()->logInfo("OSC: /check command");
             raise(SIGUSR1);
+        // Stop on lost
+        } else if ( (string)m.AddressPattern() == (OscReceiver::oscAddress + "/stoponlost") ) {
+            SysQLogger::getLogger()->logInfo("OSC: /stoponlost command");
+            stopOnMTCLost = !stopOnMTCLost;
         }
         
     } catch ( osc::Exception& error ) {
         // any parsing errors such as unexpected argument types, or 
         // missing arguments get thrown as exceptions.
-        std::cerr << "Error while parsing OSC message: "
-            << m.AddressPattern() << ": " << error.what() << "\n";
+        // std::cerr << "Error while parsing OSC message: "
+        //     << m.AddressPattern() << ": " << error.what() << "\n";
         SysQLogger::getLogger()->logError(  "OSC ERR : " + 
                                         (std::string) m.AddressPattern() + 
                                         ": " + (std::string) error.what() );

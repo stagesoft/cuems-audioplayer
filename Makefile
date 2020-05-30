@@ -15,8 +15,6 @@ LBLIBS = -lrtaudio -lrtmidi -lpthread -lstdc++fs \
 			./oscreceiver_class/oscpack/osc/OscReceivedElements.o \
 			./oscreceiver_class/oscpack/ip/posix/UdpSocket.o
 
-OSCPACKLIBS = 
-
 TARGET := audioplayer
 SRC := $(wildcard *.cpp) \
 			$(wildcard ./oscreceiver_class/*.cpp) \
