@@ -62,11 +62,11 @@ int main( int argc, char *argv[] ) {
     }
 
     // If there is at least one we parse the command line
-    CommandLineParser argParser(argc, argv);
+    CommandLineParser* argParser = new CommandLineParser(argc, argv);
 
     // --show or -s command parse
-    if ( argParser.optionExists("--show") ) {
-        std::string arg = argParser.getParam("--show");
+    if ( argParser->optionExists("--show") ) {
+        std::string arg = argParser->getParam("--show");
 
         showcopyright();
 
@@ -86,10 +86,10 @@ int main( int argc, char *argv[] ) {
     // --file or -f command parse and filename retreival and check
     fs::path filePath;
     // retreival
-    if ( argParser.optionExists("--file") || argParser.optionExists("-f") ) {
-        filePath = argParser.getParam("--file");
+    if ( argParser->optionExists("--file") || argParser->optionExists("-f") ) {
+        filePath = argParser->getParam("--file");
 
-        if ( filePath.empty() ) filePath = argParser.getParam("-f");
+        if ( filePath.empty() ) filePath = argParser->getParam("-f");
 
         if ( filePath.empty() ) {
             // Not file path specified after file option
@@ -101,7 +101,7 @@ int main( int argc, char *argv[] ) {
         }
     }
     else {
-        filePath = argParser.getEndingFilename();
+        filePath = argParser->getEndingFilename();
     }
     // check
     if ( !filePath.empty() && !fs::exists(filePath) ) {
@@ -116,10 +116,10 @@ int main( int argc, char *argv[] ) {
     // --port or -p command parse and port number retreival and check
     unsigned int portNumber = 0;
 
-    if ( argParser.optionExists("--port") || argParser.optionExists("-p") ) {
-        std::string portParam = argParser.getParam("--port");
+    if ( argParser->optionExists("--port") || argParser->optionExists("-p") ) {
+        std::string portParam = argParser->getParam("--port");
 
-        if ( portParam.empty() ) portParam = argParser.getParam("-p");
+        if ( portParam.empty() ) portParam = argParser->getParam("-p");
 
         if ( portParam.empty() ) {
             // Not valid port number specified after port option
@@ -137,10 +137,10 @@ int main( int argc, char *argv[] ) {
     // --offset or -o command parse and offset retreival and check
     long int offsetMilliseconds = 0;
 
-    if ( argParser.optionExists("--offset") || argParser.optionExists("-o") ) {
-        std::string offsetParam = argParser.getParam("--offset");
+    if ( argParser->optionExists("--offset") || argParser->optionExists("-o") ) {
+        std::string offsetParam = argParser->getParam("--offset");
 
-        if ( offsetParam.empty() ) offsetParam = argParser.getParam("-o");
+        if ( offsetParam.empty() ) offsetParam = argParser->getParam("-o");
 
         if ( offsetParam.empty() ) {
             // Not valid port number specified after port option
@@ -158,10 +158,10 @@ int main( int argc, char *argv[] ) {
     // --wait or -w command parse and offset retreival and check
     long int endWaitMilliseconds = 0;
 
-    if ( argParser.optionExists("--wait") || argParser.optionExists("-w") ) {
-        std::string waitParam = argParser.getParam("--wait");
+    if ( argParser->optionExists("--wait") || argParser->optionExists("-w") ) {
+        std::string waitParam = argParser->getParam("--wait");
 
-        if ( waitParam.empty() ) waitParam = argParser.getParam("-w");
+        if ( waitParam.empty() ) waitParam = argParser->getParam("-w");
 
         if ( waitParam.empty() ) {
             // Not valid port number specified after port option
@@ -182,10 +182,10 @@ int main( int argc, char *argv[] ) {
     // --uuid or -u command parse and offset retreival and check
     string processUuid = "";
 
-    if ( argParser.optionExists("--uuid") || argParser.optionExists("-u") ) {
-        std::string uuidParam = argParser.getParam("--uuid");
+    if ( argParser->optionExists("--uuid") || argParser->optionExists("-u") ) {
+        std::string uuidParam = argParser->getParam("--uuid");
 
-        if ( uuidParam.empty() ) uuidParam = argParser.getParam("-u");
+        if ( uuidParam.empty() ) uuidParam = argParser->getParam("-u");
 
         if ( uuidParam.empty() ) {
             // Not valid port number specified after port option
@@ -203,9 +203,11 @@ int main( int argc, char *argv[] ) {
     // --ciml or -c command parse and flag set
     bool stopOnLostFlag = true;
 
-    if ( argParser.optionExists("--ciml") || argParser.optionExists("-c") ) {
+    if ( argParser->optionExists("--ciml") || argParser->optionExists("-c") ) {
             stopOnLostFlag = false ;
     }
+
+    delete argParser;
 
     // End of command line parsing
     //////////////////////////////////////////////////////////
