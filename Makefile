@@ -3,6 +3,11 @@
 # make release - builds release options
 # make clean - removes object files
 
+#PREFIX is environment variable, but if it is not set, then set default value
+ifeq ($(prefix),)
+    prefix := /usr/local
+endif
+
 #Compiler, compiler flags and linker flags
 CXX = g++
 CXXFLAGS = -Wall -Wextra -std=c++17
@@ -49,3 +54,7 @@ wipe:
 
 clean:
 	@rm -rf $(OBJ)
+
+install: audioplayer
+	install -d $(DESTDIR)$(prefix)/bin/
+	install -m 644 audioplayer $(DESTDIR)$(prefix)/bin/
