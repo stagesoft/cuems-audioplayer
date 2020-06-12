@@ -1,0 +1,17 @@
+Source: cuems-audioplayer
+Section: Sound
+Priority: optional
+Maintainer: Ion Reguera <ion@stagelab.net>
+Build-Depends: debhelper (>=11~), librtaudio-dev, librtmidi-dev, jackd2
+Standards-Version: 4.1.4
+Homepage: https://github.com/stagesoft/stagesoft-project
+Vcs-Git: https://github.com/stagesoft/cuems-audioplayer.git
+Vcs-Browser: https://github.com/stagesoft/cuems-audioplayer.git
+
+Package: cuems-audioplayer
+Architecture: any
+Multi-Arch: foreign
+Depends: ${misc:Depends}, ${shlibs:Depends}, jackd2
+Description: MTC syncronized audio player
+ This is a audio player than can play in sync with mtc timecode
+ and a is a part of the cuems project
