@@ -17,19 +17,19 @@ CXXFLAGS += -D__UNIX_JACK__
 
 LDFLAGS =  -fsanitize=address
 LBLIBS = -lrtaudio -lrtmidi -lpthread -lstdc++fs \
-			./oscreceiver_class/oscpack/osc/OscReceivedElements.o \
-			./oscreceiver_class/oscpack/ip/posix/UdpSocket.o
+			./oscreceiver/oscpack/osc/OscReceivedElements.o \
+			./oscreceiver/oscpack/ip/posix/UdpSocket.o
 
-TARGET := audioplayer
+TARGET := audioplayer-cuems
 SRC := $(wildcard *.cpp) \
-			$(wildcard ./oscreceiver_class/*.cpp) \
-			$(wildcard ./mtcreceiver_class/*.cpp) \
-			$(wildcard ./sysqlogger_class/*.cpp) \
+			$(wildcard ./oscreceiver/*.cpp) \
+			$(wildcard ./mtcreceiver/*.cpp) \
+			$(wildcard ./cuemslogger/*.cpp) \
 
 INC := $(wildcard *.h)
 OBJ := $(SRC:.cpp=.o)
 
-.PHONY: clean clear
+.PHONY: clean
 
 all: debug
 
@@ -46,15 +46,14 @@ $(TARGET): $(OBJ) oscpack
 
 oscpack:
 	@echo Checking oscpack objects to be built
-	@cd oscreceiver_class/oscpack/ 1> /dev/null && make -i 1> /dev/null
+	@cd oscreceiver/oscpack/ 1> /dev/null && make -i 1> /dev/null
 	@cd ../.. 1> /dev/null
 
-wipe:
-	@clear
-
 clean:
-	@rm -rf $(OBJ)
+	@rm -rf $(OBJ) $(TARGET)
+	@cd oscreceiver/oscpack/ 1> /dev/null && make -i clean 1> /dev/null
+	@cd ../.. 1> /dev/null
 
-install: audioplayer
+install: $(TARGET)
 	install -d $(DESTDIR)$(prefix)/bin/
-	install -m 644 audioplayer $(DESTDIR)$(prefix)/bin/
+	install -m 755 $(TARGET) $(DESTDIR)$(prefix)/bin/

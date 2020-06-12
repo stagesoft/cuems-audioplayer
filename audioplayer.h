@@ -23,12 +23,12 @@
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
-// Stage Lab SysQ audio player class header file
+// Stage Lab Cuems audio player class header file
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
-#ifndef AUDIOPLAYER_CLASS_H
-#define AUDIOPLAYER_CLASS_H
+#ifndef AUDIOPLAYER_H
+#define AUDIOPLAYER_H
 
 //////////////////////////////////////////////////////////
 // Preprocessor definitions
@@ -51,11 +51,11 @@
 #include <csignal>
 #include <rtaudio/RtAudio.h>
 #include <rtmidi/RtMidi.h>
-#include "audiofstream_class.h"
-#include "./sysqlogger_class/sysqlogger_class.h"
-#include "sysq_errors.h"
-#include "./mtcreceiver_class/mtcreceiver_class.h"
-#include "./oscreceiver_class/oscreceiver_class.h"
+#include "audiofstream.h"
+#include "./cuemslogger/cuemslogger.h"
+#include "cuems_errors.h"
+#include "./mtcreceiver/mtcreceiver.h"
+#include "./oscreceiver/oscreceiver.h"
 
 using namespace std;
 
@@ -150,4 +150,4 @@ class AudioPlayer : public OscReceiver
 
 };
 
-#endif // AUDIOPLAYER_CLASS_H
+#endif // AUDIOPLAYER_H

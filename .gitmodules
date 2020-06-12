@@ -1,9 +1,9 @@
-[submodule "mtcreceiver_class"]
-	path = mtcreceiver_class
-	url = https://github.com/stagesoft/mtcreceiver_class.git
-[submodule "oscreceiver_class"]
-	path = oscreceiver_class
-	url = https://github.com/stagesoft/oscreceiver_class.git
-[submodule "sysqlogger_class"]
-	path = sysqlogger_class
-	url = https://github.com/stagesoft/sysqlogger_class.git
+[submodule "cuemslogger"]
+	path = cuemslogger
+	url = https://github.com/stagesoft/cuemslogger.git
+[submodule "mtcreceiver"]
+	path = mtcreceiver
+	url = https://github.com/stagesoft/mtcreceiver.git
+[submodule "oscreceiver"]
+	path = oscreceiver
+	url = https://github.com/stagesoft/oscreceiver.git

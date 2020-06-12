@@ -23,18 +23,18 @@
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
-// Stage Lab SysQ return error codes for SysQ apps
+// Stage Lab Cuems return error codes for SysQ apps
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 
-#ifndef SYSQ_ERRORS_H
-#define SYSQ_ERRORS_H
+#ifndef CUEMS_ERRORS_H
+#define CUEMS_ERRORS_H
 
-#define SYSQ_EXIT_OK                    0               // Success
-#define SYSQ_EXIT_FAILURE               -1              // Generic error
-#define SYSQ_EXIT_WRONG_PARAMETERS      -2
-#define SYSQ_EXIT_WRONG_DATA_FILE       -3
-#define SYSQ_EXIT_AUDIO_DEVICE_ERR      -4              // Perhaps jack not running
+#define CUEMS_EXIT_OK                    0               // Success
+#define CUEMS_EXIT_FAILURE               -1              // Generic error
+#define CUEMS_EXIT_WRONG_PARAMETERS      -2
+#define CUEMS_EXIT_WRONG_DATA_FILE       -3
+#define CUEMS_EXIT_AUDIO_DEVICE_ERR      -4              // Perhaps jack not running
 
-#endif
+#endif // CUEMS_ERRORS_H

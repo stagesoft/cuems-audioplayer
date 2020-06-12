@@ -23,7 +23,7 @@
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
-// Stage Lab SysQ audio player main source code file
+// Stage Lab Cuems audio player main source code file
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
@@ -36,7 +36,7 @@ namespace fs = std::filesystem;
 //////////////////////////////////////////////////////////
 // Initializing static class members and global vars
 AudioPlayer* myAudioPlayer = NULL;
-SysQLogger* logger = NULL;
+CuemsLogger* logger = NULL;
 
 //////////////////////////////////////////////////////////
 // Main application function
@@ -47,8 +47,8 @@ int main( int argc, char *argv[] ) {
     signal(SIGINT, sigIntHandler);
 
     // We instantiate here our singleton logger object to be accessed
-    // via the SysQLogger::getLogger() function across the app
-    logger = new SysQLogger( "audioplayer" );
+    // via the CuemsLogger::getLogger() function across the app
+    logger = new CuemsLogger( "audioplayer" );
 
     //////////////////////////////////////////////////////////
     // Parse command line
@@ -56,9 +56,9 @@ int main( int argc, char *argv[] ) {
         showcopyright();        
         showusage();
         
-        logger->getLogger()->logError( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+        logger->getLogger()->logError( "Exiting with result code: " + std::to_string(CUEMS_EXIT_WRONG_PARAMETERS) );
 
-        exit( SYSQ_EXIT_WRONG_PARAMETERS );
+        exit( CUEMS_EXIT_WRONG_PARAMETERS );
     }
 
     // If there is at least one we parse the command line
@@ -78,9 +78,9 @@ int main( int argc, char *argv[] ) {
             showcopydisclaimer();
         }
 
-        logger->getLogger()->logError( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+        logger->getLogger()->logError( "Exiting with result code: " + std::to_string(CUEMS_EXIT_WRONG_PARAMETERS) );
 
-        exit( SYSQ_EXIT_WRONG_PARAMETERS );
+        exit( CUEMS_EXIT_WRONG_PARAMETERS );
     }
 
     // --file or -f command parse and filename retreival and check
@@ -95,9 +95,9 @@ int main( int argc, char *argv[] ) {
             // Not file path specified after file option
             std::cout << "File not specified after --file or -f option." << endl;
 
-            logger->getLogger()->logError( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_DATA_FILE) );
+            logger->getLogger()->logError( "Exiting with result code: " + std::to_string(CUEMS_EXIT_WRONG_DATA_FILE) );
 
-            exit( SYSQ_EXIT_WRONG_DATA_FILE );
+            exit( CUEMS_EXIT_WRONG_DATA_FILE );
         }
     }
     else {
@@ -108,9 +108,9 @@ int main( int argc, char *argv[] ) {
             // File does not exist
             std::cout << "Unable to locate file: " << filePath << endl;
 
-            logger->getLogger()->logError( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_DATA_FILE) );
+            logger->getLogger()->logError( "Exiting with result code: " + std::to_string(CUEMS_EXIT_WRONG_DATA_FILE) );
 
-            exit( SYSQ_EXIT_WRONG_DATA_FILE );
+            exit( CUEMS_EXIT_WRONG_DATA_FILE );
     }
 
     // --port or -p command parse and port number retreival and check
@@ -125,9 +125,9 @@ int main( int argc, char *argv[] ) {
             // Not valid port number specified after port option
             std::cout << "Not valid port number after --port or -p option." << endl;
 
-            logger->getLogger()->logError( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+            logger->getLogger()->logError( "Exiting with result code: " + std::to_string(CUEMS_EXIT_WRONG_PARAMETERS) );
 
-            exit( SYSQ_EXIT_WRONG_PARAMETERS );
+            exit( CUEMS_EXIT_WRONG_PARAMETERS );
         }
         else {
             portNumber = std::stoi( portParam );
@@ -146,9 +146,9 @@ int main( int argc, char *argv[] ) {
             // Not valid port number specified after port option
             std::cout << "Not valid offset integer after --offset or -o option." << endl;
 
-            logger->getLogger()->logError( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+            logger->getLogger()->logError( "Exiting with result code: " + std::to_string(CUEMS_EXIT_WRONG_PARAMETERS) );
 
-            exit( SYSQ_EXIT_WRONG_PARAMETERS );
+            exit( CUEMS_EXIT_WRONG_PARAMETERS );
         }
         else {
             offsetMilliseconds = std::stoi( offsetParam );
@@ -167,9 +167,9 @@ int main( int argc, char *argv[] ) {
             // Not valid port number specified after port option
             std::cout << "Not valid wait integer after --wait or -w option." << endl;
 
-            logger->getLogger()->logError( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+            logger->getLogger()->logError( "Exiting with result code: " + std::to_string(CUEMS_EXIT_WRONG_PARAMETERS) );
 
-            exit( SYSQ_EXIT_WRONG_PARAMETERS );
+            exit( CUEMS_EXIT_WRONG_PARAMETERS );
         }
         else {
             if (std::stoi( waitParam ) == -1)
@@ -191,9 +191,9 @@ int main( int argc, char *argv[] ) {
             // Not valid port number specified after port option
             std::cout << "Not valid uuid string after --uuid or -u option." << endl;
 
-            logger->getLogger()->logError( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+            logger->getLogger()->logError( "Exiting with result code: " + std::to_string(CUEMS_EXIT_WRONG_PARAMETERS) );
 
-            exit( SYSQ_EXIT_WRONG_PARAMETERS );
+            exit( CUEMS_EXIT_WRONG_PARAMETERS );
         }
         else {
             processUuid = uuidParam ;
@@ -223,9 +223,9 @@ int main( int argc, char *argv[] ) {
         showcopyright();
         showusage();
 
-        logger->getLogger()->logError( "Exiting with result code: " + std::to_string(SYSQ_EXIT_WRONG_PARAMETERS) );
+        logger->getLogger()->logError( "Exiting with result code: " + std::to_string(CUEMS_EXIT_WRONG_PARAMETERS) );
 
-        exit ( SYSQ_EXIT_WRONG_PARAMETERS );
+        exit ( CUEMS_EXIT_WRONG_PARAMETERS );
     }
     else {
         myAudioPlayer = new AudioPlayer(    portNumber, 

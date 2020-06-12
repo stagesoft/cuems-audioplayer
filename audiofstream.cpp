@@ -23,12 +23,12 @@
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
-// Stage Lab SysQ audio file stream class source file
+// Stage Lab Cuems audio file stream class source file
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 
-#include "audiofstream_class.h"
+#include "audiofstream.h"
 
 ////////////////////////////////////////////
 // Initializing static class members
@@ -40,10 +40,10 @@ AudioFstream::AudioFstream( const string filename,
 {
     if ( bad() ) {
         std::cerr << "Unable to find or open file!" << endl;
-        SysQLogger::getLogger()->logError("Couldn't open file : " + filename);
+        CuemsLogger::getLogger()->logError("Couldn't open file : " + filename);
     }
     else {
-        SysQLogger::getLogger()->logOK("File open OK! : " + filename);
+        CuemsLogger::getLogger()->logOK("File open OK! : " + filename);
     }
 
     checkHeader();
@@ -109,14 +109,14 @@ bool AudioFstream::checkHeader( void ) {
             std::cout << "-> SubChunk2Size " << headerData.SubChunk2Size << endl << endl;
             */
 
-            SysQLogger::getLogger()->logOK("WAV header OK! " + std::to_string(bytesRead) + " bytes read");
+            CuemsLogger::getLogger()->logOK("WAV header OK! " + std::to_string(bytesRead) + " bytes read");
 
             return true;
         }
         else {
             std::string str = "Wrong WAV header!!! " + std::to_string(bytesRead) + " bytes read";
             std::cerr <<  str << endl;
-            SysQLogger::getLogger()->logError(str);
+            CuemsLogger::getLogger()->logError(str);
         }
     }
 
@@ -129,12 +129,12 @@ bool AudioFstream::loadFile( const string path ) {
 
     if ( bad() ) {
         std::cerr << "Unable to find or open file!" << endl;
-        SysQLogger::getLogger()->logError("Couldn't open file : " + path);
+        CuemsLogger::getLogger()->logError("Couldn't open file : " + path);
 
         return false;
     }
     else {
-        SysQLogger::getLogger()->logOK("File open : " + path);
+        CuemsLogger::getLogger()->logOK("File open : " + path);
         return checkHeader();
     }
 }

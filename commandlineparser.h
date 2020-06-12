@@ -23,49 +23,34 @@
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
-// Stage Lab SysQ command line parser class source file
+// Stage Lab Cuems command line parser class header file
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
+#ifndef COMMANDLINEPARSER_H
+#define COMMANDLINEPARSER_H
 
-#include "commandlineparser_class.h"
+#include <string>
+#include <vector>
+#include <algorithm>
+#include <filesystem>
 
-//////////////////////////////////////////////////////////
-CommandLineParser::CommandLineParser (int &argc, char **argv) {
-    for ( int i = 1; i < argc; ++i ) {
-        this->args.push_back( std::string(argv[i]) );
-    }
-}
-
-//////////////////////////////////////////////////////////
-CommandLineParser::~CommandLineParser ( void ) {
-}
+using namespace std;
+namespace fs = std::filesystem;
 
 //////////////////////////////////////////////////////////
-const std::string CommandLineParser::getParam( const std::string &option ) const {
-    std::vector<std::string>::const_iterator itr;
-    
-    itr =  std::find( this->args.begin(), this->args.end(), option );
+class CommandLineParser
+{
+    public:
+        CommandLineParser (int &argc, char **argv);
+        ~CommandLineParser ( void );
 
-    if ( itr != this->args.end() && ++itr != this->args.end()){
-        return *itr;
-    }
+        const std::string getParam( const std::string &option ) const;
+        const std::string getEndingFilename( void );
+        bool optionExists( const std::string &option ) const;
 
-    return "";
-}
+    private:
+        std::vector <std::string> args;
+};
 
-//////////////////////////////////////////////////////////
-bool CommandLineParser::optionExists( const std::string &option ) const {
-    return std::find(this->args.begin(), this->args.end(), option) 
-        != this->args.end();
-}
-
-//////////////////////////////////////////////////////////
-const std::string CommandLineParser::getEndingFilename( void ) {
-    fs::path lastArg = args[args.size() - 1];
-
-    if ( lastArg.has_filename() ) 
-        return lastArg.string();
-    else
-        return "";
-}
+#endif // COMMANDLINEPARSER_H

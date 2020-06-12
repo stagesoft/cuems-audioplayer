@@ -23,18 +23,18 @@
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
-// Stage Lab SysQ audio file stream class header file
+// Stage Lab Cuems audio file stream class header file
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
-#ifndef AUDIOFSTREAM_CLASS_H
-#define AUDIOFSTREAM_CLASS_H
+#ifndef AUDIOFSTREAM_H
+#define AUDIOFSTREAM_H
 
 #include <iostream>
 #include <fstream>
 #include <iomanip>
-#include "./sysqlogger_class/sysqlogger_class.h"
-#include "sysq_errors.h"
+#include "./cuemslogger/cuemslogger.h"
+#include "cuems_errors.h"
 
 using namespace std;
 
@@ -69,4 +69,4 @@ class AudioFstream : public ifstream
 
 };
 
-#endif // AUDIOFSTREAM_CLASS_H
+#endif // AUDIOFSTREAM_H

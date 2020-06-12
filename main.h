@@ -31,10 +31,10 @@
 #include <string>
 #include <csignal>
 #include <filesystem>
-#include "commandlineparser_class.h"
-#include "audioplayer_class.h"
-#include "./sysqlogger_class/sysqlogger_class.h"
-#include "sysq_errors.h"
+#include "commandlineparser.h"
+#include "audioplayer.h"
+#include "./cuemslogger/cuemslogger.h"
+#include "cuems_errors.h"
 
 //////////////////////////////////////////////////////////
 // Functions declarations

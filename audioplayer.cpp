@@ -23,12 +23,12 @@
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
-// Stage Lab SysQ audio player class code file
+// Stage Lab Cuems audio player class code file
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 
-#include "audioplayer_class.h"
+#include "audioplayer.h"
 
 ////////////////////////////////////////////
 // Initializing static class members
@@ -105,22 +105,22 @@ AudioPlayer::AudioPlayer(   int port,
                 std::to_string(audio.getCurrentApi());
 
             std::cerr << str << endl;
-            SysQLogger::getLogger()->logError(str);
+            CuemsLogger::getLogger()->logError(str);
 
             str = "Maybe JACK NOT RUNNING!!!";
 
             std::cerr << str << endl;
-            SysQLogger::getLogger()->logError(str);
+            CuemsLogger::getLogger()->logError(str);
 
-            exit( SYSQ_EXIT_AUDIO_DEVICE_ERR );
+            exit( CUEMS_EXIT_AUDIO_DEVICE_ERR );
         }
     }
     catch ( RtAudioError &error ) {
         std::cerr << error.getMessage();
-        SysQLogger::getLogger()->logError( error.getMessage() );
+        CuemsLogger::getLogger()->logError( error.getMessage() );
 
-        SysQLogger::getLogger()->logInfo( "Exiting with result code: " + std::to_string(SYSQ_EXIT_AUDIO_DEVICE_ERR) );
-        exit( SYSQ_EXIT_AUDIO_DEVICE_ERR );
+        CuemsLogger::getLogger()->logInfo( "Exiting with result code: " + std::to_string(CUEMS_EXIT_AUDIO_DEVICE_ERR) );
+        exit( CUEMS_EXIT_AUDIO_DEVICE_ERR );
     }
 
     // Get the default audio device and set stream parameters
@@ -146,10 +146,10 @@ AudioPlayer::AudioPlayer(   int port,
     }
     catch (RtAudioError &error) {
         std::cerr << error.getMessage();
-        SysQLogger::getLogger()->logError( error.getMessage() );
+        CuemsLogger::getLogger()->logError( error.getMessage() );
 
-        SysQLogger::getLogger()->logInfo( "Exiting with result code: " + std::to_string(SYSQ_EXIT_AUDIO_DEVICE_ERR) );
-        exit( SYSQ_EXIT_AUDIO_DEVICE_ERR );
+        CuemsLogger::getLogger()->logInfo( "Exiting with result code: " + std::to_string(CUEMS_EXIT_AUDIO_DEVICE_ERR) );
+        exit( CUEMS_EXIT_AUDIO_DEVICE_ERR );
     }
 
 
@@ -163,7 +163,7 @@ AudioPlayer::~AudioPlayer( void ) {
     }
     catch (RtAudioError& error) {
         std::cerr << error.getMessage();
-        SysQLogger::getLogger()->logError( error.getMessage() );
+        CuemsLogger::getLogger()->logError( error.getMessage() );
     }
 
     // Clean up
@@ -194,12 +194,12 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
         // If there is MTC signal and we haven't started, check it
         if ( ap->mtcReceiver.isTimecodeRunning ) {
             if ( !ap->mtcSignalStarted ) {
-                SysQLogger::getLogger()->logInfo("MTC -> Play started");
+                CuemsLogger::getLogger()->logInfo("MTC -> Play started");
                 ap->mtcSignalStarted = true;
             }
             else {
                 if ( ap->mtcSignalLost ) {
-                    SysQLogger::getLogger()->logInfo("MTC -> Play resumed");
+                    CuemsLogger::getLogger()->logInfo("MTC -> Play resumed");
                 }
             }
 
@@ -209,7 +209,7 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
         // Either, if there is no MTC signal and we already started, it is lost
         else {
             if ( ap->mtcSignalStarted && !ap->mtcSignalLost ) {
-                SysQLogger::getLogger()->logInfo("MTC signal lost");
+                CuemsLogger::getLogger()->logInfo("MTC signal lost");
                 ap->mtcSignalLost = true;
             }
         }
@@ -325,14 +325,14 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
                     else
                         str = std::to_string( ap->endWaitTime ) + " ms";
 
-                    SysQLogger::getLogger()->logInfo("Out of file boundaries, waiting " + str);
+                    CuemsLogger::getLogger()->logInfo("Out of file boundaries, waiting " + str);
                 }
 
                 ap->endOfStream = true;
                 long int timecodeNow = chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count();
 
                 if ( ( timecodeNow - ap->endTimeStamp ) > ap->endWaitTime ) {
-                    SysQLogger::getLogger()->logInfo("Waiting time exceded, ending audioplayer");
+                    CuemsLogger::getLogger()->logInfo("Waiting time exceded, ending audioplayer");
                     ap->endOfPlay = true;
                     return 1;
                 }
@@ -354,7 +354,7 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
         if (    !ap->mtcReceiver.isTimecodeRunning && 
                 ap->mtcSignalStarted && 
                 !ap->mtcSignalLost ) {
-            SysQLogger::getLogger()->logInfo("MTC signal lost");
+            CuemsLogger::getLogger()->logInfo("MTC signal lost");
             ap->mtcSignalLost = true;
         }
 
@@ -385,14 +385,14 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
             // osc::ReceivedMessageArgumentStream args = m.ArgumentStream();
             // args >> volumeMaster[0] >> osc::EndMessage;
             m.ArgumentStream() >> volumeMaster[0] >> osc::EndMessage;
-            SysQLogger::getLogger()->logInfo("OSC: new volume channel 0 " + std::to_string(volumeMaster[0]));
+            CuemsLogger::getLogger()->logInfo("OSC: new volume channel 0 " + std::to_string(volumeMaster[0]));
             
         // Volume channel 1
         } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/vol1") ) {
             // osc::ReceivedMessageArgumentStream args = m.ArgumentStream();
             // args >> volumeMaster[1] >> osc::EndMessage;
             m.ArgumentStream() >> volumeMaster[1] >> osc::EndMessage;
-            SysQLogger::getLogger()->logInfo("OSC: new volume channel 1 " + std::to_string(volumeMaster[1]));
+            CuemsLogger::getLogger()->logInfo("OSC: new volume channel 1 " + std::to_string(volumeMaster[1]));
             
         // Volume master
         } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/volmaster") ) {
@@ -400,7 +400,7 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
             // args >> volumeMaster[0] >> osc::EndMessage;
             m.ArgumentStream() >> volumeMaster[0] >> osc::EndMessage;
             volumeMaster[1] = volumeMaster[0];
-            SysQLogger::getLogger()->logInfo("OSC: new volume master " + std::to_string(volumeMaster[0]));
+            CuemsLogger::getLogger()->logInfo("OSC: new volume master " + std::to_string(volumeMaster[0]));
 
         // Offset
         } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/offset") ) {
@@ -410,7 +410,7 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
             m.ArgumentStream() >> offsetOSC >> osc::EndMessage;
             offsetOSC = floor(offsetOSC);
 
-            SysQLogger::getLogger()->logInfo("OSC: new offset value " + std::to_string((long int)offsetOSC));
+            CuemsLogger::getLogger()->logInfo("OSC: new offset value " + std::to_string((long int)offsetOSC));
 
             // Offset argument in OSC command is in milliseconds
             // so we need to calculate in bytes in our file
@@ -430,7 +430,7 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
             m.ArgumentStream() >> waitOSC >> osc::EndMessage;
             waitOSC = floor(waitOSC);
 
-            SysQLogger::getLogger()->logInfo("OSC: new end wait value " + std::to_string((long int)waitOSC));
+            CuemsLogger::getLogger()->logInfo("OSC: new end wait value " + std::to_string((long int)waitOSC));
 
             endWaitTime = waitOSC;             // In milliseconds
         // Load
@@ -438,14 +438,14 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
             const char* newPath;
             m.ArgumentStream() >> newPath >> osc::EndMessage;
             audioPath = newPath;
-            SysQLogger::getLogger()->logInfo("OSC: /load command");
+            CuemsLogger::getLogger()->logInfo("OSC: /load command");
             audioFile.close();
-            SysQLogger::getLogger()->logInfo("OSC: previous file closed");
+            CuemsLogger::getLogger()->logInfo("OSC: previous file closed");
             audioFile.loadFile(audioPath);
-            SysQLogger::getLogger()->logInfo("OSC: loaded new path -> " + audioPath);
+            CuemsLogger::getLogger()->logInfo("OSC: loaded new path -> " + audioPath);
         // Play/pause
         } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/play") ) {
-            SysQLogger::getLogger()->logInfo("OSC: /play command");
+            CuemsLogger::getLogger()->logInfo("OSC: /play command");
             if ( playheadControl != 0 )
                 playheadControl = 0;
             else 
@@ -454,22 +454,22 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
         } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/stop") ) {
             // TO DO : right now is the same as play/pause... Don't know if there 
             //          will be other implementations of the command...
-            SysQLogger::getLogger()->logInfo("OSC: /stop command");
+            CuemsLogger::getLogger()->logInfo("OSC: /stop command");
             if ( playheadControl != 0 )
                 playheadControl = 0;
             else 
                 playheadControl = 1;
         // Quit
         } else if ( (string)m.AddressPattern() == (OscReceiver::oscAddress + "/quit") ) {
-            SysQLogger::getLogger()->logInfo("OSC: /quit command");
+            CuemsLogger::getLogger()->logInfo("OSC: /quit command");
             raise(SIGTERM);
         // Check
         } else if ( (string)m.AddressPattern() == (OscReceiver::oscAddress + "/check") ) {
-            SysQLogger::getLogger()->logInfo("OSC: /check command");
+            CuemsLogger::getLogger()->logInfo("OSC: /check command");
             raise(SIGUSR1);
         // Stop on lost
         } else if ( (string)m.AddressPattern() == (OscReceiver::oscAddress + "/stoponlost") ) {
-            SysQLogger::getLogger()->logInfo("OSC: /stoponlost command");
+            CuemsLogger::getLogger()->logInfo("OSC: /stoponlost command");
             stopOnMTCLost = !stopOnMTCLost;
         }
         
@@ -478,7 +478,7 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
         // missing arguments get thrown as exceptions.
         // std::cerr << "Error while parsing OSC message: "
         //     << m.AddressPattern() << ": " << error.what() << "\n";
-        SysQLogger::getLogger()->logError(  "OSC ERR : " + 
+        CuemsLogger::getLogger()->logError(  "OSC ERR : " + 
                                         (std::string) m.AddressPattern() + 
                                         ": " + (std::string) error.what() );
     }
