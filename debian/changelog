@@ -1,4 +1,4 @@
-cuems-audioplayer (0.0.0-1) UNRELEASED; urgency=low
+cuems-audioplayer (0.0.0-1) buster; urgency=low
 
   * Initial pre-release.
 
