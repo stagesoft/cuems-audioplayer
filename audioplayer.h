@@ -32,9 +32,6 @@
 
 //////////////////////////////////////////////////////////
 // Preprocessor definitions
-// #define TIXML_USE_STL
-// #define __LINUX_ALSA__
-// #define __UNIX_JACK__
 #ifndef XJADEO_ADJUSTMENT
 #define XJADEO_ADJUSTMENT 0
 #endif

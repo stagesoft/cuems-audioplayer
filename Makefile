@@ -16,9 +16,7 @@ CXXFLAGS = -Wall -Wextra -std=c++17
 CXXFLAGS += -D__UNIX_JACK__
 
 LDFLAGS =  -fsanitize=address
-LBLIBS = -lrtaudio -lrtmidi -lpthread -lstdc++fs \
-			./oscreceiver/oscpack/osc/OscReceivedElements.o \
-			./oscreceiver/oscpack/ip/posix/UdpSocket.o
+LBLIBS = -lrtaudio -lrtmidi -lpthread -lstdc++fs -loscpack
 
 TARGET := audioplayer-cuems
 SRC := $(wildcard *.cpp) \
@@ -41,18 +39,11 @@ debug: target
 
 target: $(TARGET)
 
-$(TARGET): $(OBJ) oscpack
+$(TARGET): $(OBJ)
 	$(CXX) $(OBJ) -o $@ $(LBLIBS)
-
-oscpack:
-	@echo Checking oscpack objects to be built
-	@cd oscreceiver/oscpack/ 1> /dev/null && make -i 1> /dev/null
-	@cd ../.. 1> /dev/null
 
 clean:
 	@rm -rf $(OBJ) $(TARGET)
-	@cd oscreceiver/oscpack/ 1> /dev/null && make -i clean 1> /dev/null
-	@cd ../.. 1> /dev/null
 
 install: $(TARGET)
 	install -d $(DESTDIR)$(prefix)/bin/
