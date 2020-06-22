@@ -272,7 +272,9 @@ int main( int argc, char *argv[] ) {
 
 //////////////////////////////////////////////////////////
 void showcopyright( void ) {
-    std::cout << "audioplayer - Copyright (C) 2020 Stage Lab & bTactic" << endl <<
+    std::cout << "audioplayer-cuems v. " << 
+        cuems_audioplayer_VERSION_MAJOR << "." << cuems_audioplayer_VERSION_MINOR <<
+        " - Copyright (C) 2020 Stage Lab & bTactic" << endl <<
         "This program comes with ABSOLUTELY NO WARRANTY; for details type `show w'." << endl <<
         "This is free software, and you are welcome to redistribute it" << endl <<
         "under certain conditions; type `show c' for details." << endl << endl;
@@ -310,7 +312,7 @@ void showcopydisclaimer( void ) {
 
 //////////////////////////////////////////////////////////
 void showusage( void ) {
-    std::cout << "Usage :    audioplayer --port <osc_port> [other options] <wav_file_path>" << endl << endl <<
+    std::cout << "Usage :    audioplayer-cuems --port <osc_port> [other options] <wav_file_path>" << endl << endl <<
         "           COMPULSORY OPTIONS:" << endl << 
         "           --file , -f <file_path> : wav file to read audio data from." << endl <<
         "               File name can also be stated as the last argument with no option indicator." << endl << endl <<
@@ -331,7 +333,7 @@ void showusage( void ) {
         "               w : shows warranty disclaimer." << endl << 
         "               c : shows copyright disclaimer." << endl << endl << 
         "           Default audio device params are : 2 ch x 44.1K -> default device." << endl <<
-        "           audioplayer uses Jack Audio environment, make sure it's running." << endl << endl;
+        "           audioplayer-cuems uses Jack Audio environment, make sure it's running." << endl << endl;
 }
 
 //////////////////////////////////////////////////////////

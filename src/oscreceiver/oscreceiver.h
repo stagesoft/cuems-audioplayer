@@ -23,28 +23,49 @@
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
-// Stage Lab SysQ audio player main header file
+// Stage Lab Cuems OSC receiver class header file
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 
-#include <string>
-#include <csignal>
-#include <filesystem>
-#include "commandlineparser.h"
-#include "audioplayer.h"
-#include "./cuemslogger/cuemslogger.h"
-#include "cuems_errors.h"
+#ifndef OSCRECEIVER_H
+#define OSCRECEIVER_H
+
+#include <iostream>
+#include <thread>
+#include "oscpack/osc/OscPacketListener.h"
+#include "oscpack/osc/OscReceivedElements.h"
+#include "oscpack/ip/UdpSocket.h"
+#include "oscpack/ip/IpEndpointName.h"
 
 //////////////////////////////////////////////////////////
-// Functions declarations
+// Preprocessor definitions
+#define PORT 7000
 
-void showcopyright( void );
-void showusage( void );
-void showwarrantydisclaimer( void );
-void showcopydisclaimer( void );
+using namespace std;
 
-// System signal handlers
-void sigTermHandler( int signum );
-void sigUsr1Handler( int signum );
-void sigIntHandler( int signum );
+class OscReceiver : public osc::OscPacketListener 
+{
+    public:
+        OscReceiver( int port = 7000, const string oscRoute = "/master" );
+        ~OscReceiver( void );
+
+        UdpListeningReceiveSocket *udpListener;
+
+        void setOscAddress( std::string address );
+        std::string getOscAddress( void );
+
+    protected:
+
+        inline virtual void ProcessMessage( const osc::ReceivedMessage& /*m*/ , 
+                                            const IpEndpointName& /*remoteEndpoint*/ ) {};
+
+        void threadedRun( void );
+
+        int oscPort;
+        std::string oscAddress;
+
+};
+
+
+#endif // OSCRECEIVER_H

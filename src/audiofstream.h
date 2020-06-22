@@ -33,7 +33,7 @@
 #include <iostream>
 #include <fstream>
 #include <iomanip>
-#include "./cuemslogger/cuemslogger.h"
+#include "cuemslogger.h"
 #include "cuems_errors.h"
 
 using namespace std;

@@ -1,9 +1,9 @@
 [submodule "cuemslogger"]
-	path = cuemslogger
+	path = src/cuemslogger
 	url = https://github.com/stagesoft/cuemslogger.git
 [submodule "mtcreceiver"]
-	path = mtcreceiver
+	path = src/mtcreceiver
 	url = https://github.com/stagesoft/mtcreceiver.git
 [submodule "oscreceiver"]
-	path = oscreceiver
+	path = src/oscreceiver
 	url = https://github.com/stagesoft/oscreceiver.git

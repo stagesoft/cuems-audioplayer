@@ -49,10 +49,10 @@
 #include <rtaudio/RtAudio.h>
 #include <rtmidi/RtMidi.h>
 #include "audiofstream.h"
-#include "./cuemslogger/cuemslogger.h"
+#include "cuemslogger.h"
 #include "cuems_errors.h"
-#include "./mtcreceiver/mtcreceiver.h"
-#include "./oscreceiver/oscreceiver.h"
+#include "mtcreceiver.h"
+#include "oscreceiver.h"
 
 using namespace std;
 
