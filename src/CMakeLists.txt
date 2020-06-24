@@ -3,6 +3,9 @@ cmake_minimum_required(VERSION 3.10)
 # Project name and version
 project(cuems_audioplayer VERSION 0.0)
 
+# Debug postfix
+set(CMAKE_DEBUG_POSTFIX _dbg)
+
 # C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
@@ -14,6 +17,7 @@ add_subdirectory(cuemslogger)
 
 # Executable
 add_executable(audioplayer-cuems main.cpp audioplayer.cpp audiofstream.cpp commandlineparser.cpp)
+set_target_properties(audioplayer-cuems PROPERTIES DEBUG_POSTFIX ${CMAKE_DEBUG_POSTFIX})
 
 # Configure file
 configure_file(cuems_audioplayerConfig.h.in cuems_audioplayerConfig.h)

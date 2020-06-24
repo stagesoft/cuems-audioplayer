@@ -241,7 +241,7 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
 
                 // Seek the file with the new coordinates
                 if ( ( (ap->playHead + ap->headOffset) >= 0 ) && 
-                        ( (ap->playHead + ap->headOffset) <= (long long) ap->audioFile.headerData.SubChunk2Size ) ){
+                        ( (ap->playHead + ap->headOffset) <= (long long) ap->audioFile.headerData.fileSize ) ){
 
                     ap->endOfStream = false;
                     ap->outOfFile = false;

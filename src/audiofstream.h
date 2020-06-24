@@ -32,6 +32,7 @@
 
 #include <iostream>
 #include <fstream>
+#include <vector>
 #include <iomanip>
 #include "cuemslogger.h"
 #include "cuems_errors.h"
@@ -40,16 +41,24 @@ using namespace std;
 
 class AudioFstream : public ifstream
 {
+    typedef struct {
+        char id[5] = "    ";
+        unsigned long int size = 0;
+    } subChunk;
+
     public:
         AudioFstream(   const string filename = "", 
                         ios_base::openmode openmode = ios_base::in | ios_base::binary );
         inline ~AudioFstream() { };
 
         struct headerData {
-            char ChunkID[5] = "    ";
-            unsigned long int ChunkSize = 0;
-            char Format[5] = "    ";
-            char SubChunk1ID[5] = "    ";
+            // "RIFF" & "WAVE" headers
+            char RIFFID[5] = "    ";
+            unsigned long int RIFFSize = 0;
+            unsigned long int fileSize = 0;
+            char WAVEID[5] = "    ";
+
+            // "fmt " header data
             unsigned long int SubChunk1Size = 0;
             unsigned int AudioFormat = 0;
             unsigned int NumChannels = 0;
@@ -58,8 +67,9 @@ class AudioFstream : public ifstream
             unsigned int BlockAlign = 0;
             unsigned int BitsPerSample = 0;
             
-            char SubChunk2ID[5] = "    ";
-            unsigned long int SubChunk2Size = 0;
+            vector<subChunk> subHeaders;
+
+            unsigned long int dataSize = 0;
         } headerData;
 
         bool checkHeader( void );

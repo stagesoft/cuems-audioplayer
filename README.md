@@ -23,7 +23,11 @@ Run:
 
     cmake -S src/ -B build/
 
-Then:
+to get a standard _Release_ configuration
+ 
+    cmake -S src/ -B build/ -DCMAKE_BUILD_TYPE=Debug
+
+to get the _Debug_ configuration. And then:
 
     cd build
     make
