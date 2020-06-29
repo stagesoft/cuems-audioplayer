@@ -2,7 +2,7 @@ Source: cuems-audioplayer
 Section: Sound
 Priority: optional
 Maintainer: Ion Reguera <ion@stagelab.net>
-Build-Depends: debhelper (>=11~), librtaudio-dev, librtmidi-dev, jackd2
+Build-Depends: debhelper (>=11~), librtaudio-dev, librtmidi-dev, jackd2, liboscpack-dev
 Standards-Version: 4.1.4
 Homepage: https://github.com/stagesoft/stagesoft-project
 Vcs-Git: https://github.com/stagesoft/cuems-audioplayer.git

@@ -1,3 +1,11 @@
+cuems-audioplayer (0.0.1-1) buster; urgency=medium
+
+  * Update web header reading
+  * Now using oscpack-dev sistem package
+  * mtcreceiver improvements
+
+ -- Ion Reguera <ion@stagelab.com>  Mon, 29 Jun 2020 15:07:13 +0200
+
 cuems-audioplayer (0.0.0-1) buster; urgency=low
 
   * Initial pre-release.
