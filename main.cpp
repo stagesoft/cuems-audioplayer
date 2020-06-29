@@ -365,13 +365,13 @@ void sigUsr1Handler( int /* signum */  ) {
 void sigIntHandler( int signum ) {
     logger->getLogger()->logInfo( "SIGINT received!" );
 
+    logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(signum) );
+
     if ( myAudioPlayer != NULL )
         delete myAudioPlayer;
 
     if ( logger != NULL )
         delete logger;
-
-    logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(signum) );
 
     std::cout << endl;
 

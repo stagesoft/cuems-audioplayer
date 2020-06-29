@@ -31,10 +31,14 @@
 #ifndef CUEMS_ERRORS_H
 #define CUEMS_ERRORS_H
 
-#define CUEMS_EXIT_OK                    0               // Success
-#define CUEMS_EXIT_FAILURE               -1              // Generic error
-#define CUEMS_EXIT_WRONG_PARAMETERS      -2
-#define CUEMS_EXIT_WRONG_DATA_FILE       -3
-#define CUEMS_EXIT_AUDIO_DEVICE_ERR      -4              // Perhaps jack not running
+#define CUEMS_EXIT_OK                   0               // Success
+#define CUEMS_EXIT_FAILURE              -1              // Generic error
+#define CUEMS_EXIT_WRONG_PARAMETERS     -2
+#define CUEMS_EXIT_WRONG_DATA_FILE      -3
+#define CUEMS_EXIT_AUDIO_DEVICE_ERR     -4              // Perhaps jack not running
+#define CUEMS_EXIT_FAILED_OLA_SETUP     -5              // OLA setup failed, daemon running?
+#define CUEMS_EXIT_FAILED_OLA_SEL_SERV  -6              // OLA select server failed, daemon running?
+#define CUEMS_EXIT_FAILED_XML_INIT      -7              // XML parser initializer failed
+#define CUEMS_EXIT_NO_MIDI_PORTS_FOUND  -8              // Midi Error when opening port
 
 #endif // CUEMS_ERRORS_H
