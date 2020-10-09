@@ -70,6 +70,7 @@ class AudioPlayer : public OscReceiver
                         const string filePath = "", 
                         const string uuid = "",
                         const bool stopOnLostFlag = true,
+                        const bool mtcFollowFlag = false,
                         unsigned int numberOfChannels = 2, 
                         unsigned int sRate = 44100, 
                         unsigned int device = 0,
@@ -102,7 +103,7 @@ class AudioPlayer : public OscReceiver
         static bool endOfPlay;                  // Are we done playing and waiting?
         static bool outOfFile;                  // Is our head out of our file boundaries?
         long int endTimeStamp = 0;              // Our finish timestamp to calculate end wait
-        static bool followingMtc;               // Is player following MTC?
+        bool followingMtc;               // Is player following MTC?
 
         // Playing head vars and flags
         static std::atomic<long long int> playHead; // Current reading head position in bytes

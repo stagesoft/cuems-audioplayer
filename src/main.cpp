@@ -207,6 +207,11 @@ int main( int argc, char *argv[] ) {
             stopOnLostFlag = false ;
     }
 
+    bool mtcFollowFlag = false;
+    if ( argParser->optionExists("--mtcfollow") || argParser->optionExists("-m") ) {
+            mtcFollowFlag = true ;
+    }
+
     delete argParser;
 
     // End of command line parsing
@@ -328,6 +333,8 @@ void showusage( void ) {
         "           --wait , -w <milliseconds> : waiting time after reaching the end of the file and before" << endl <<
         "               quiting the program. Default is 0. -1 indicates the program remains" << endl <<
         "               running till SIG-TERM or OSC quit is received." << endl << endl <<
+        "           --mtcfollow , -m : Start the player following MTC directly. Default is not to follow until" << endl <<
+        "               it is indicated to the player through OSC." << endl << endl <<
         "           OTHER OPTIONS:" << endl << endl <<
         "           --show : shows license disclaimers." << endl <<
         "               w : shows warranty disclaimer." << endl << 

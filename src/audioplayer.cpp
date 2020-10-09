@@ -34,7 +34,6 @@
 // Initializing static class members
 
 std::atomic<long long int> AudioPlayer::playHead(0);
-bool AudioPlayer::followingMtc = true;
 bool AudioPlayer::endOfStream = false;
 bool AudioPlayer::endOfPlay = false;
 bool AudioPlayer::outOfFile = false;
@@ -47,6 +46,7 @@ AudioPlayer::AudioPlayer(   int port,
                             const string filePath , 
                             const string uuid,
                             const bool stopOnLostFlag,
+                            const bool mtcFollowFlag,
                             unsigned int numberOfChannels, 
                             unsigned int sRate, 
                             unsigned int device,
@@ -61,7 +61,8 @@ AudioPlayer::AudioPlayer(   int port,
                             audioFile(filePath.c_str()),
                             endWaitTime(finalWait),
                             playerUuid(uuid),
-                            stopOnMTCLost(stopOnLostFlag)
+                            stopOnMTCLost(stopOnLostFlag),
+                            followingMtc(mtcFollowFlag)
  {
     //////////////////////////////////////////////////////////
     // Config tasks to be implemented later maybe
@@ -471,6 +472,10 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
         } else if ( (string)m.AddressPattern() == (OscReceiver::oscAddress + "/stoponlost") ) {
             CuemsLogger::getLogger()->logInfo("OSC: /stoponlost command");
             stopOnMTCLost = !stopOnMTCLost;
+        // MTC Follow
+        } else if ( (string)m.AddressPattern() == (OscReceiver::oscAddress + "/mtcfollow") ) {
+            CuemsLogger::getLogger()->logInfo("OSC: /mtcfollow command");
+            followingMtc = !followingMtc;
         }
         
     } catch ( osc::Exception& error ) {
