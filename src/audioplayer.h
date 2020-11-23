@@ -69,11 +69,11 @@ class AudioPlayer : public OscReceiver
                         const string oscRoute = "/",
                         const string filePath = "", 
                         const string uuid = "",
+                        const string deviceName = "",
                         const bool stopOnLostFlag = true,
                         const bool mtcFollowFlag = false,
                         unsigned int numberOfChannels = 2, 
                         unsigned int sRate = 44100, 
-                        unsigned int device = 0,
                         RtAudio::Api audioApi = RtAudio::Api::UNIX_JACK );
         ~AudioPlayer( void );
         //////////////////////////////////////////
@@ -84,7 +84,7 @@ class AudioPlayer : public OscReceiver
         unsigned int nChannels;                         // Our default number of audio channels
         unsigned int sampleRate;                        // Our sample rate
         unsigned int bufferFrames;                      // 2048 sample frames
-        unsigned int deviceID;                          // 0 -> default device
+        string deviceName;
 
         unsigned int audioFrameSize;                    // Audio frame size in bytes
         unsigned int audioSecondSize;                   // Audio second size in bytes

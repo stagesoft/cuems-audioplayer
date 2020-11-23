@@ -42,21 +42,21 @@ bool AudioPlayer::outOfFile = false;
 AudioPlayer::AudioPlayer(   int port, 
                             long int initOffset,
                             long int finalWait,
-                            const string oscRoute ,
-                            const string filePath , 
+                            const string oscRoute,
+                            const string filePath, 
                             const string uuid,
+                            const string deviceName,
                             const bool stopOnLostFlag,
                             const bool mtcFollowFlag,
                             unsigned int numberOfChannels, 
                             unsigned int sRate, 
-                            unsigned int device,
                             RtAudio::Api audioApi )
                             :   // Members initialization
                             OscReceiver(port, oscRoute.c_str()),
                             audioPath(filePath),
                             nChannels(numberOfChannels),
                             sampleRate(sRate),
-                            deviceID(device),
+                            deviceName(deviceName),
                             audio(audioApi),
                             audioFile(filePath.c_str()),
                             endWaitTime(finalWait),
@@ -100,8 +100,10 @@ AudioPlayer::AudioPlayer(   int port,
     //////////////////////////////////////////////////////////
     // Setting our audio stream parameters
     // Check for audio devices
+    int audioDeviceId = 0;
     try {
-        if ( audio.getDeviceCount() == 0 ) {
+        int deviceCount = audio.getDeviceCount();
+        if ( deviceCount == 0 ) {
             std::string str = "No audio devices found on API:" + 
                 std::to_string(audio.getCurrentApi());
 
@@ -115,6 +117,20 @@ AudioPlayer::AudioPlayer(   int port,
 
             exit( CUEMS_EXIT_AUDIO_DEVICE_ERR );
         }
+        else {
+            bool found = false;
+            for(audioDeviceId = 0; audioDeviceId < deviceCount; ++audioDeviceId) {
+                RtAudio::DeviceInfo info = audio.getDeviceInfo(audioDeviceId);
+                if (info.name == deviceName) {
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found) {
+                audioDeviceId = audio.getDefaultOutputDevice();
+            }
+        }
     }
     catch ( RtAudioError &error ) {
         std::cerr << error.getMessage();
@@ -126,7 +142,7 @@ AudioPlayer::AudioPlayer(   int port,
 
     // Get the default audio device and set stream parameters
     RtAudio::StreamParameters streamParams;
-    streamParams.deviceId = audio.getDefaultOutputDevice();
+    streamParams.deviceId = audioDeviceId;
     streamParams.nChannels = nChannels;
     streamParams.firstChannel = 0;
 
