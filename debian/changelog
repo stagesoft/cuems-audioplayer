@@ -1,3 +1,14 @@
+cuems-audioplayer (0.0.2-1) buster; urgency=medium
+
+  * CMake working, first approach
+  * CMake little improvements and install
+  * Wav header reading improvement.
+  * Submodules correction.
+  * New default behaviour not to follow MTC.
+  * Audio device selection feature added.
+
+ -- Ion Reguera <ion@stagelab.com>  Mon, 25 Jan 2021 18:07:03 +0100
+
 cuems-audioplayer (0.0.1-1) buster; urgency=medium
 
   * Update web header reading
