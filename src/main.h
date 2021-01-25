@@ -31,9 +31,10 @@
 #include <string>
 #include <csignal>
 #include <filesystem>
+#include "cuems_audioplayerConfig.h"
 #include "commandlineparser.h"
 #include "audioplayer.h"
-#include "./cuemslogger/cuemslogger.h"
+#include "cuemslogger.h"
 #include "cuems_errors.h"
 
 //////////////////////////////////////////////////////////

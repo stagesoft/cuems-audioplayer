@@ -200,11 +200,37 @@ int main( int argc, char *argv[] ) {
         }
     }
 
+    // --uuid or -u command parse and offset retreival and check
+    string audioDeviceName = "";
+
+    if ( argParser->optionExists("--device") || argParser->optionExists("-d") ) {
+        std::string deviceParam = argParser->getParam("--device");
+
+        if ( deviceParam.empty() ) deviceParam = argParser->getParam("-d");
+
+        if ( deviceParam.empty() ) {
+            // Not valid port number specified after port option
+            std::cout << "Not valid device name string after --device or -d option." << endl;
+
+            logger->getLogger()->logError( "Exiting with result code: " + std::to_string(CUEMS_EXIT_WRONG_PARAMETERS) );
+
+            exit( CUEMS_EXIT_WRONG_PARAMETERS );
+        }
+        else {
+            audioDeviceName = deviceParam ;
+        }
+    }
+
     // --ciml or -c command parse and flag set
     bool stopOnLostFlag = true;
 
     if ( argParser->optionExists("--ciml") || argParser->optionExists("-c") ) {
             stopOnLostFlag = false ;
+    }
+
+    bool mtcFollowFlag = false;
+    if ( argParser->optionExists("--mtcfollow") || argParser->optionExists("-m") ) {
+            mtcFollowFlag = true ;
     }
 
     delete argParser;
@@ -234,6 +260,7 @@ int main( int argc, char *argv[] ) {
                                             "", 
                                             filePath.c_str(),
                                             processUuid,
+                                            audioDeviceName, 
                                             stopOnLostFlag );
 
         logger->logOK("AudioPlayer object created OK!");
@@ -245,7 +272,7 @@ int main( int argc, char *argv[] ) {
     string str;
     str = "Starting object with " + std::to_string(myAudioPlayer->nChannels) + " channels" +
         " at " + std::to_string(myAudioPlayer->sampleRate) + " samples/sec" +
-        " on device number " + std::to_string(myAudioPlayer->deviceID);
+        " on device number " + myAudioPlayer->deviceName;
 
     std::cout << str << endl;
     logger->logOK(str);
@@ -272,7 +299,9 @@ int main( int argc, char *argv[] ) {
 
 //////////////////////////////////////////////////////////
 void showcopyright( void ) {
-    std::cout << "audioplayer - Copyright (C) 2020 Stage Lab & bTactic" << endl <<
+    std::cout << "audioplayer-cuems v. " << 
+        cuems_audioplayer_VERSION_MAJOR << "." << cuems_audioplayer_VERSION_MINOR <<
+        " - Copyright (C) 2020 Stage Lab & bTactic" << endl <<
         "This program comes with ABSOLUTELY NO WARRANTY; for details type `show w'." << endl <<
         "This is free software, and you are welcome to redistribute it" << endl <<
         "under certain conditions; type `show c' for details." << endl << endl;
@@ -310,7 +339,7 @@ void showcopydisclaimer( void ) {
 
 //////////////////////////////////////////////////////////
 void showusage( void ) {
-    std::cout << "Usage :    audioplayer --port <osc_port> [other options] <wav_file_path>" << endl << endl <<
+    std::cout << "Usage :    audioplayer-cuems --port <osc_port> [other options] <wav_file_path>" << endl << endl <<
         "           COMPULSORY OPTIONS:" << endl << 
         "           --file , -f <file_path> : wav file to read audio data from." << endl <<
         "               File name can also be stated as the last argument with no option indicator." << endl << endl <<
@@ -318,6 +347,10 @@ void showusage( void ) {
         "           OPTIONAL OPTIONS:" << endl << 
         "           --ciml , -c : Continue If Mtc is Lost, flag to define that the player should continue" << endl <<
         "               if the MTC sync signal is lost. If not specified (standard mode) it stops on lost." << endl << endl <<
+        "           --device , -d : Audio device name to connect the player to. If not stated it will" << endl <<
+        "               try to connect to the default device." << endl << endl <<
+        "           --mtcfollow , -m : Start the player following MTC directly. Default is not to follow until" << endl <<
+        "               it is indicated to the player through OSC." << endl << endl <<
         "           --offset , -o <milliseconds> : playing time offset in milliseconds." << endl <<
         "               Positive (+) or (-) negative integer indicating time displacement." << endl <<
         "               Default is 0." << endl << endl <<
@@ -331,7 +364,7 @@ void showusage( void ) {
         "               w : shows warranty disclaimer." << endl << 
         "               c : shows copyright disclaimer." << endl << endl << 
         "           Default audio device params are : 2 ch x 44.1K -> default device." << endl <<
-        "           audioplayer uses Jack Audio environment, make sure it's running." << endl << endl;
+        "           audioplayer-cuems uses Jack Audio environment, make sure it's running." << endl << endl;
 }
 
 //////////////////////////////////////////////////////////
