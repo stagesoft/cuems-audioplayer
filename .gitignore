@@ -35,3 +35,6 @@ audioplayer-cuems
 # Visual Code dirs
 .vscode
 .vscode/**
+
+#CMake build dir
+build/**
