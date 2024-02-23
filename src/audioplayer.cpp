@@ -344,15 +344,18 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
 
                     CuemsLogger::getLogger()->logInfo("Out of file boundaries, waiting " + str);
                 }
-
-                ap->endOfStream = true;
+                if ( ap->audioFile.eof() ) ap->audioFile.clear();
+                    ap->endOfStream = true;
+                    ap->outOfFile = true;
                 long int timecodeNow = chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count();
-
+                
                 if ( ( timecodeNow - ap->endTimeStamp ) > ap->endWaitTime ) {
                     CuemsLogger::getLogger()->logInfo("Waiting time exceded, ending audioplayer");
                     ap->endOfPlay = true;
                     return 1;
                 }
+                
+                
             }
         }
         else {
