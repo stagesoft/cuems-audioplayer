@@ -34,9 +34,9 @@
 // Initializing static class members
 
 std::atomic<long long int> AudioPlayer::playHead(0);
-bool AudioPlayer::endOfStream = false;
-bool AudioPlayer::endOfPlay = false;
-bool AudioPlayer::outOfFile = false;
+std::atomic <bool> AudioPlayer::endOfStream = false;
+std::atomic <bool> AudioPlayer::endOfPlay = false;
+std::atomic <bool> AudioPlayer::outOfFile = false;
 
 //////////////////////////////////////////////////////////
 AudioPlayer::AudioPlayer(   int port, 
