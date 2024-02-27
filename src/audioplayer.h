@@ -99,9 +99,9 @@ class AudioPlayer : public OscReceiver
         AudioFstream audioFile;
 
         // Stream and playing control flags and vars
-        static bool endOfStream;                // Is the end of the stream reached already?
-        static bool endOfPlay;                  // Are we done playing and waiting?
-        static bool outOfFile;                  // Is our head out of our file boundaries?
+        static std::atomic <bool> endOfStream;                // Is the end of the stream reached already?
+        static std::atomic <bool> endOfPlay;                  // Are we done playing and waiting?
+        static std::atomic <bool> outOfFile;                  // Is our head out of our file boundaries?
         long int endTimeStamp = 0;              // Our finish timestamp to calculate end wait
         bool followingMtc;               // Is player following MTC?
 
@@ -114,7 +114,7 @@ class AudioPlayer : public OscReceiver
 
         unsigned int headStep = 2;              // Head step per channel, by now SINT16 format, 2 bytes
         long int headOffset = 0;                // Head offset
-        bool offsetChanged = false;             // Flag to recognise when the offset is OSC changed
+        std::atomic <bool> offsetChanged = false;             // Flag to recognise when the offset is OSC changed
         long int headNewOffset = 0;             // Head offset to update through OSC
 
         long int endWaitTime = 0;               // End time to wait before quitting
