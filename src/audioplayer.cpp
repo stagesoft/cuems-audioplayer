@@ -262,10 +262,13 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
 
                     ap->endOfStream = false;
                     ap->outOfFile = false;
+                    if ( ap->audioFile.eof() ) {
+                        ap->audioFile.clear();
+                    } 
                     ap->audioFile.seekg( ap->playHead + ap->headOffset , ios_base::beg );
                 }
                 else {
-                    if ( ap->audioFile.eof() ) ap->audioFile.clear();
+                    if ( ap->audioFile.eof() ){} ap->audioFile.clear();
                     ap->endOfStream = true;
                     ap->outOfFile = true;
                 }
@@ -317,7 +320,7 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
 
             memset( (char *)(outputBuffer) + startByte, 0, bytes );
 
-            ap->outOfFile = true;
+           // ap->outOfFile = true;
         }
 
         // If we did not read anything, we are out of boundaries, maybe...
@@ -326,8 +329,8 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
             if ( ap->endWaitTime == 0 ) {
                 // If there is not waiting time, we just finish
                 // and we end the stream by returning a positive value
-                ap->endOfStream = true;
                 ap->endOfPlay = true;
+                
                 return 1;
             }
             else {
@@ -344,9 +347,9 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
 
                     CuemsLogger::getLogger()->logInfo("Out of file boundaries, waiting " + str);
                 }
-                if ( ap->audioFile.eof() ) ap->audioFile.clear();
-                    ap->endOfStream = true;
-                    ap->outOfFile = true;
+                
+                ap->endOfStream = true;
+
                 long int timecodeNow = chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count();
                 
                 if ( ( timecodeNow - ap->endTimeStamp ) > ap->endWaitTime ) {
