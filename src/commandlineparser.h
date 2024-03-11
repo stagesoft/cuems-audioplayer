@@ -33,10 +33,10 @@
 #include <string>
 #include <vector>
 #include <algorithm>
-#include <experimental/filesystem>
+#include <filesystem>
 
 using namespace std;
-namespace fs = experimental::filesystem;
+namespace fs = std::filesystem;
 
 //////////////////////////////////////////////////////////
 class CommandLineParser

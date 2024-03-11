@@ -31,7 +31,7 @@
 #include "main.h"
 
 using namespace std;
-namespace fs = experimental::filesystem;
+namespace fs = std::filesystem;
 
 //////////////////////////////////////////////////////////
 // Initializing static class members and global vars
