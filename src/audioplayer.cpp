@@ -147,7 +147,14 @@ AudioPlayer::AudioPlayer(   int port,
     streamParams.firstChannel = 0;
 
     RtAudio::StreamOptions streamOps;
-    streamOps.streamName = "a" + to_string(oscPort) + playerUuid;
+
+    // proto fruta, if we got uuid use only that
+    if (playerUuid != ""){
+        streamOps.streamName = "a" + playerUuid;
+    } else{
+        streamOps.streamName = "a" + to_string(oscPort) + playerUuid;
+    }
+    
 
     try {
         audio.openStream(  &streamParams, 

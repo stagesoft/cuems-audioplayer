@@ -241,8 +241,15 @@ int main( int argc, char *argv[] ) {
 
     // Now that we now a more detailed information on the specific player
     // we change the logger slug to reflect this identification on the logs
-    logger->setNewSlug("a" + std::to_string(portNumber) + processUuid); 
 
+    //logger->setNewSlug("a" + std::to_string(portNumber) + processUuid);
+
+    // (proto_fruta) if we got a uiid from command line options use only that
+    if (processUuid !=""){
+        logger->setNewSlug("a" + processUuid);
+    } else {
+        logger->setNewSlug("a" + std::to_string(portNumber) + processUuid);
+    }
 
     if ( filePath.empty() || portNumber == 0 ) {
         std::cout << "Wrong parameters! Check usage..." << endl << endl;
