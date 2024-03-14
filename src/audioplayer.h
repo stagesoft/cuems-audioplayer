@@ -95,7 +95,7 @@ class AudioPlayer : public OscReceiver
 
         // Our midi, osc and audio objects
         RtAudio audio;
-        MtcReceiver mtcReceiver;
+        MtcReceiver *mtcReceiver;
         AudioFstream audioFile;
 
         // Stream and playing control flags and vars
