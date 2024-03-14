@@ -79,7 +79,6 @@ AudioPlayer::AudioPlayer(   int port,
         catch ( RtMidiError &error )
         {
         ++errorCount;
-        error.printMessage();
         CuemsLogger::getLogger()->logError("DRIVER_ERROR catched " +  std::to_string( errorCount ) + " times, retrying");
         std::this_thread::sleep_for( std::chrono::milliseconds(10) );
         }
