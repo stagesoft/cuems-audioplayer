@@ -64,6 +64,25 @@ AudioPlayer::AudioPlayer(   int port,
                             stopOnMTCLost(stopOnLostFlag),
                             followingMtc(mtcFollowFlag)
  {
+
+    // RtMidiIn constructor
+
+    bool errorFlag = true;
+    int errorCount = 0;
+
+    while ( errorFlag )
+    {
+        try {
+            mtcReceiver =  new MtcReceiver();
+            errorFlag = false;
+        }
+        catch ( RtMidiError &error )
+        {
+        ++errorCount;
+        CuemsLogger::getLogger()->logError("DRIVER_ERROR catched " +  std::to_string( errorCount ) + " times, retrying");
+        std::this_thread::sleep_for( std::chrono::milliseconds(10) );
+        }
+    }
     //////////////////////////////////////////////////////////
     // Config tasks to be implemented later maybe
     // loadNodeConfig();
@@ -208,7 +227,7 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
     // If we are receiving MTC and following it...
     // Or we are not receiving it and we do not stop on its lost
     // And we haven't reached the end of the file...
-    if (    ( (ap->mtcReceiver.isTimecodeRunning && ap->followingMtc) || 
+    if (    ( (ap->mtcReceiver->isTimecodeRunning && ap->followingMtc) || 
             (ap->mtcSignalLost && !ap->stopOnMTCLost) ) &&
             ap->playheadControl == 1 ) {
         unsigned int count = 0;
@@ -216,7 +235,7 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
 
         // Check play control flags
         // If there is MTC signal and we haven't started, check it
-        if ( ap->mtcReceiver.isTimecodeRunning ) {
+        if ( ap->mtcReceiver->isTimecodeRunning ) {
             if ( !ap->mtcSignalStarted ) {
                 CuemsLogger::getLogger()->logInfo("MTC -> Play started");
                 ap->mtcSignalStarted = true;
@@ -240,12 +259,12 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
 
         // Now we start playing in two different cases:
         // 1) after MTC: if there is MTC signal then we treat it
-        if ( ap->mtcReceiver.isTimecodeRunning && ap->followingMtc && !ap->mtcSignalLost )
+        if ( ap->mtcReceiver->isTimecodeRunning && ap->followingMtc && !ap->mtcSignalLost )
         {
             // Tollerance 2 frames, due to the MTC 8 packages -> 2 frames relay
-            long int tollerance = MTC_FRAMES_TOLLERANCE * ( 1000 / (float) ap->mtcReceiver.curFrameRate ) * ap->audioMillisecondSize;
+            long int tollerance = MTC_FRAMES_TOLLERANCE * ( 1000 / (float) ap->mtcReceiver->curFrameRate ) * ap->audioMillisecondSize;
             
-            long int mtcHeadInBytes = ap->mtcReceiver.mtcHead * ap->audioMillisecondSize ;
+            long int mtcHeadInBytes = ap->mtcReceiver->mtcHead * ap->audioMillisecondSize ;
 
             long int difference = ap->playHead - mtcHeadInBytes;
 
@@ -381,7 +400,7 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
         // Check play control flags
         // if we already started and we have no MTC signal, and it was 
         // already lost, it is lost now
-        if (    !ap->mtcReceiver.isTimecodeRunning && 
+        if (    !ap->mtcReceiver->isTimecodeRunning && 
                 ap->mtcSignalStarted && 
                 !ap->mtcSignalLost ) {
             CuemsLogger::getLogger()->logInfo("MTC signal lost");
