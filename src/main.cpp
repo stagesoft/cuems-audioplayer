@@ -274,7 +274,7 @@ int main( int argc, char *argv[] ) {
     }
 
     // Micro pause to let everything get in place
-    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
     string str;
     str = "Starting object with " + std::to_string(myAudioPlayer->nChannels) + " channels" +
