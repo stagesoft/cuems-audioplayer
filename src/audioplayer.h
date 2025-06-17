@@ -68,12 +68,12 @@ class AudioPlayer : public OscReceiver
                         long int finalWait = 0,
                         const string oscRoute = "/",
                         const string filePath = "", 
-                        const string uuid = "",
                         const string deviceName = "",
+                        const string &client_name = "Audio_Player",
                         const bool stopOnLostFlag = true,
                         const bool mtcFollowFlag = false,
                         unsigned int numberOfChannels = 2, 
-                        unsigned int sRate = 44100, 
+                        unsigned int sRate = 44100,
                         RtAudio::Api audioApi = RtAudio::Api::UNIX_JACK );
         ~AudioPlayer( void );
         //////////////////////////////////////////

@@ -245,10 +245,12 @@ int main( int argc, char *argv[] ) {
     //logger->setNewSlug("a" + std::to_string(portNumber) + processUuid);
 
     // (proto_fruta) if we got a uiid from command line options use only that
-    if (processUuid !=""){
-        logger->setNewSlug("a" + processUuid);
+    if (!processUuid.empty()){
+        logger->setNewSlug("d" + processUuid);
     } else {
-        logger->setNewSlug("a" + std::to_string(portNumber) + processUuid);
+        logger->setNewSlug("d" + std::to_string(portNumber));
+        // and set processUuid to port number for midi visibility
+        processUuid = std::to_string(portNumber);
     }
 
     if ( filePath.empty() || portNumber == 0 ) {
@@ -261,14 +263,17 @@ int main( int argc, char *argv[] ) {
         exit ( CUEMS_EXIT_WRONG_PARAMETERS );
     }
     else {
-        myAudioPlayer = new AudioPlayer(    portNumber, 
-                                            offsetMilliseconds, 
-                                            endWaitMilliseconds, 
-                                            "", 
-                                            filePath.c_str(),
-                                            processUuid,
-                                            audioDeviceName, 
-                                            stopOnLostFlag );
+        myAudioPlayer = new AudioPlayer(
+            portNumber,
+            offsetMilliseconds,
+            endWaitMilliseconds,
+            "",
+            filePath.c_str(),
+            audioDeviceName,
+            "Audio_Player-" + processUuid,
+            stopOnLostFlag
+            
+        );
 
         logger->logOK("AudioPlayer object created OK!");
     }

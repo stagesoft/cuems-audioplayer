@@ -44,15 +44,16 @@ AudioPlayer::AudioPlayer(   int port,
                             long int finalWait,
                             const string oscRoute,
                             const string filePath, 
-                            const string uuid,
                             const string deviceName,
+                            const string &client_name,
                             const bool stopOnLostFlag,
                             const bool mtcFollowFlag,
                             unsigned int numberOfChannels, 
-                            unsigned int sRate, 
+                            unsigned int sRate,
                             RtAudio::Api audioApi )
                             :   // Members initialization
                             OscReceiver(port, oscRoute.c_str()),
+                            mtcReceiver(RtMidiIn::LINUX_ALSA, client_name),
                             audioPath(filePath),
                             nChannels(numberOfChannels),
                             sampleRate(sRate),
@@ -60,7 +61,6 @@ AudioPlayer::AudioPlayer(   int port,
                             audio(audioApi),
                             audioFile(filePath.c_str()),
                             endWaitTime(finalWait),
-                            playerUuid(uuid),
                             stopOnMTCLost(stopOnLostFlag),
                             followingMtc(mtcFollowFlag)
  {
@@ -149,11 +149,9 @@ AudioPlayer::AudioPlayer(   int port,
     RtAudio::StreamOptions streamOps;
 
     // proto fruta, if we got uuid use only that
-    if (playerUuid != ""){
-        streamOps.streamName = "a" + playerUuid;
-    } else{
-        streamOps.streamName = "a" + to_string(oscPort) + playerUuid;
-    }
+
+
+    streamOps.streamName = client_name;
     
 
     try {
