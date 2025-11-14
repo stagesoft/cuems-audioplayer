@@ -363,7 +363,6 @@ void AudioFstream::read(char* buffer, size_t bytes)
     lastBytesRead = 0;
     
     if (!fileOpen || errorState) {
-        std::cerr << "DEBUG audiofstream read: fileOpen=" << fileOpen << " errorState=" << errorState << std::endl;
         return;
     }
     
@@ -380,23 +379,10 @@ void AudioFstream::read(char* buffer, size_t bytes)
         size_t framesNeeded = samplesNeeded / fileChannels;
         size_t resampledFloatsNeeded = framesNeeded * fileChannels;
         
-        std::cerr << "DEBUG audiofstream read: resampling path - bytes=" << bytes 
-                  << " samplesNeeded=" << samplesNeeded
-                  << " framesNeeded=" << framesNeeded 
-                  << " resampledFloatsNeeded=" << resampledFloatsNeeded 
-                  << " eofReached=" << eofReached << std::endl;
-        
         float* tempFloatBuffer = new float[resampledFloatsNeeded];
         size_t floatsResampled = 0;
         
-        static int resample_loop_counter = 0;
         while (floatsResampled < resampledFloatsNeeded && !eofReached) {
-            if (resample_loop_counter++ < 5) {
-                std::cerr << "DEBUG audiofstream read: resampling loop - floatsResampled=" << floatsResampled 
-                          << " needed=" << resampledFloatsNeeded 
-                          << " convBufPos=" << conversionBufferPos 
-                          << " convBufUsed=" << conversionBufferUsed << std::endl;
-            }
             // First, ensure we have decoded float data in conversionBuffer
             while (conversionBufferPos >= conversionBufferUsed && !eofReached) {
                 // Need to decode more data
@@ -454,18 +440,14 @@ void AudioFstream::read(char* buffer, size_t bytes)
         }
         
         // Copy resampled floats directly to output (JACK native format)
-        static int copy_counter = 0;
-        for (size_t i = 0; i < floatsResampled && i < samplesNeeded; i++) {
+        size_t floatsToCopy = std::min(floatsResampled, samplesNeeded);
+        for (size_t i = 0; i < floatsToCopy; i++) {
             outputPtr[i] = tempFloatBuffer[i];
             lastBytesRead += 4;  // 4 bytes per float
         }
         
-        if (copy_counter++ < 3) {
-            std::cerr << "DEBUG audiofstream: Copied " << std::min(floatsResampled, samplesNeeded) 
-                      << " floats to output, lastBytesRead=" << lastBytesRead 
-                      << " sample values: " << (floatsResampled > 0 ? tempFloatBuffer[0] : 0.0f) 
-                      << ", " << (floatsResampled > 1 ? tempFloatBuffer[1] : 0.0f) << std::endl;
-        }
+        // Update current position based on how many samples we output
+        currentSamplePos += floatsToCopy;
         
         delete[] tempFloatBuffer;
         
@@ -521,7 +503,6 @@ void AudioFstream::read(char* buffer, size_t bytes)
 void AudioFstream::seekg(long long pos, ios_base::seekdir dir)
 {
     if (!fileOpen || !formatContext) {
-        std::cerr << "DEBUG audiofstream: seekg failed - fileOpen=" << fileOpen << " formatContext=" << (formatContext != nullptr) << std::endl;
         return;
     }
     
@@ -537,19 +518,13 @@ void AudioFstream::seekg(long long pos, ios_base::seekdir dir)
         targetBytePos = (long long)getFileSize() + pos;
     }
     
-    std::cerr << "DEBUG audiofstream: seekg targetBytePos=" << targetBytePos << " fileSize=" << getFileSize() << std::endl;
-    
     // Convert byte position to sample position (32-bit float samples)
     int64_t targetSamplePos = targetBytePos / 4;
-    
-    std::cerr << "DEBUG audiofstream: seekg targetSamplePos=" << targetSamplePos << " totalSamples=" << totalSamples << std::endl;
     
     // Account for resampling ratio
     int64_t fileSamplePos = targetSamplePos;
     if (resamplingEnabled && targetSampleRate > 0) {
         fileSamplePos = (int64_t)((double)targetSamplePos * fileSampleRate / targetSampleRate);
-        std::cerr << "DEBUG audiofstream: resampling enabled, fileSamplePos=" << fileSamplePos 
-                  << " (rate " << fileSampleRate << "→" << targetSampleRate << ")" << std::endl;
     }
     
     // Convert to timestamp
@@ -557,12 +532,8 @@ void AudioFstream::seekg(long long pos, ios_base::seekdir dir)
                                           (AVRational){1, (int)fileSampleRate},
                                           formatContext->streams[audioStreamIndex]->time_base);
     
-    std::cerr << "DEBUG audiofstream: seeking to timestamp=" << targetTimestamp << " fileSamplePos=" << fileSamplePos << std::endl;
-    
     // Seek
     int ret = av_seek_frame(formatContext, audioStreamIndex, targetTimestamp, AVSEEK_FLAG_BACKWARD);
-    
-    std::cerr << "DEBUG audiofstream: av_seek_frame returned " << ret << std::endl;
     
     if (ret < 0) {
         std::cerr << "Seek error: " << getFFmpegError(ret) << endl;

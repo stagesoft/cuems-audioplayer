@@ -228,14 +228,6 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
 
     AudioPlayer *ap = (AudioPlayer*) data;
 
-    static int callback_counter = 0;
-    if (callback_counter++ < 3) {
-        std::cerr << "DEBUG: audioCallback called, nBufferFrames=" << nBufferFrames 
-                  << " followingMtc=" << ap->followingMtc 
-                  << " mtcRunning=" << ap->mtcReceiver.isTimecodeRunning 
-                  << " playheadControl=" << ap->playheadControl << std::endl;
-    }
-
     // If we are receiving MTC and following it...
     // Or we are not receiving it and we do not stop on its lost
     // And we haven't reached the end of the file...
@@ -295,14 +287,6 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
                 long long seekPosition = mtcHeadInBytes + ap->headOffset;
                 unsigned long long fileSize = ap->audioFile.getFileSize();
                 
-                // Debug logging for boundary check
-                std::cerr << "DEBUG: Boundary check - seekPos=" << seekPosition 
-                          << " fileSize=" << fileSize 
-                          << " valid=" << (seekPosition >= 0 && seekPosition <= (long long)fileSize) << std::endl;
-                CuemsLogger::getLogger()->logInfo("Boundary check: seekPos=" + std::to_string(seekPosition) + 
-                                                   " fileSize=" + std::to_string(fileSize) +
-                                                   " valid=" + std::to_string(seekPosition >= 0 && seekPosition <= (long long)fileSize));
-                
                 if ( (seekPosition >= 0) && (seekPosition <= (long long)fileSize) ){
 
                     ap->endOfStream = false;
@@ -314,10 +298,8 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
                     ap->audioFile.seekg( seekPosition , ios_base::beg );
                     // Update playHead to match where we actually are (without offset, as offset is separate)
                     ap->playHead = seekPosition - ap->headOffset;
-                    std::cerr << "DEBUG: Seek successful to " << seekPosition << ", playHead now=" << ap->playHead << std::endl;
                 }
                 else {
-                    std::cerr << "DEBUG: Out of file boundaries!" << std::endl;
                     CuemsLogger::getLogger()->logInfo("Out of file boundaries!");
                     if ( ap->audioFile.eof() ){} ap->audioFile.clear();
                     ap->endOfStream = true;
@@ -330,34 +312,24 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
         // 2) without MTC: we do not treat it but, in any case, we continue playing
         //      while we are not out of the file boundaries
         if ( !ap->outOfFile ) {
-            for ( unsigned int i = 0; i < nBufferFrames; i++ ) {
-                // Read a complete frame (all channels at once) - required for FFmpeg/resampling
-                read = 0;
-                if ( (ap->playHead + ap->headOffset) >= 0 ) {
-                    // Read all channels for this frame in one call
-                    ap->audioFile.read((char*) ap->intermediate, ap->audioFrameSize);
-                    read = ap->audioFile.gcount();
-
-                    // Apply volume to each channel
-                    for ( unsigned int ch = 0; ch < ap->nChannels; ch++) {
-                        ap->intermediate[ch] *= ap->volumeMaster[ch];
-                    }
+            // Calculate total bytes to read for this buffer
+            unsigned long int bytesToRead = nBufferFrames * ap->audioFrameSize;
+            
+            if ( (ap->playHead + ap->headOffset) >= 0 ) {
+                // Read entire buffer in ONE call - much more efficient for resampling!
+                ap->audioFile.read((char*) outputBuffer, bytesToRead);
+                count = ap->audioFile.gcount();
+                
+                // Apply volume to each sample
+                float* floatBuffer = (float*)outputBuffer;
+                for ( unsigned int i = 0; i < count / 4; i++ ) {
+                    floatBuffer[i] *= ap->volumeMaster[i % ap->nChannels];
                 }
-                else {
-                    // Before file start - fill with silence
-                    for ( unsigned int ch = 0; ch < ap->nChannels; ch++) {
-                        ap->intermediate[ch] = 0;
-                    }
-                    read = ap->audioFrameSize;
-                }
-
-                memcpy((char *)outputBuffer + count, ap->intermediate, ap->audioFrameSize);
-
-                count += read;
-
-                if ( read == 0 ) {
-                    break;
-                }
+            }
+            else {
+                // Before file start - fill with silence
+                memset(outputBuffer, 0, bytesToRead);
+                count = bytesToRead;
             }
 
             ap->playHead += count;
@@ -368,8 +340,6 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
         if ( count < nBufferFrames ) {
             unsigned long int bytes = (nBufferFrames - count) * ap->audioFrameSize;
             unsigned long int startByte = count * ap->audioFrameSize;
-            
-            std::cerr << "DEBUG: Filling silence - count=" << count << " nBufferFrames=" << nBufferFrames << std::endl;
 
             memset( (char *)(outputBuffer) + startByte, 0, bytes );
 
@@ -378,7 +348,6 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
 
         // If we did not read anything, we are out of boundaries, maybe...
         if ( count == 0 ) {
-            std::cerr << "DEBUG: count=0, exiting! outOfFile=" << ap->outOfFile << " endOfStream=" << ap->endOfStream << std::endl;
             // Maybe it is the end of the stream
             if ( ap->endWaitTime == 0 ) {
                 // If there is not waiting time, we just finish
@@ -425,11 +394,6 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
     // If we are not playing audio... Just copy silence...
     else
     {
-        static int silence_counter = 0;
-        if (silence_counter++ < 3) {
-            std::cerr << "DEBUG: In silence branch - not playing audio" << std::endl;
-        }
-        
         // Check play control flags
         // if we already started and we have no MTC signal, and it was 
         // already lost, it is lost now
