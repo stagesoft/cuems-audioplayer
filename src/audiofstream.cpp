@@ -24,6 +24,7 @@
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 // Stage Lab Cuems audio file stream class source file
+// Now using FFmpeg for comprehensive audio format support
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
@@ -33,24 +34,38 @@
 #include <algorithm>
 
 ////////////////////////////////////////////
-// Initializing static class members
-
+// Constructor
 ////////////////////////////////////////////
 AudioFstream::AudioFstream( const string filename, 
                             ios_base::openmode openmode ) 
 {
-    fileHandle = AF_NULL_FILEHANDLE;
+    // Initialize FFmpeg members
+    formatContext = nullptr;
+    codecContext = nullptr;
+    packet = nullptr;
+    frame = nullptr;
+    swrContext = nullptr;
+    audioStreamIndex = -1;
+    
+    // Initialize file state
     fileOpen = false;
-    lastReadFrames = 0;
-    lastBytesRead = 0;
-    sampleFormat = 0;
-    sampleWidth = 2;  // Default to 16-bit
-    fileSampleRate = 0;
-    fileChannels = 0;
     eofReached = false;
     errorState = false;
-    currentFramePos = 0;
-    totalFrames = 0;
+    lastBytesRead = 0;
+    
+    // Initialize audio properties
+    fileChannels = 0;
+    fileSampleRate = 0;
+    fileBitsPerSample = 32;  // Output is 32-bit float
+    totalSamples = 0;
+    fileSize = 0;
+    currentSamplePos = 0;
+    
+    // Initialize conversion buffer
+    conversionBuffer = nullptr;
+    conversionBufferSize = 0;
+    conversionBufferUsed = 0;
+    conversionBufferPos = 0;
     
     // Initialize resampling members
     targetSampleRate = 0;
@@ -61,410 +76,748 @@ AudioFstream::AudioFstream( const string filename,
     resampleOutputBuffer = nullptr;
     resampleBufferSize = 0;
 
-    // Initialize headerData
-    headerSize = 0;
-    memset(headerData.RIFFID, ' ', 5);
-    memset(headerData.WAVEID, ' ', 5);
-    headerData.RIFFSize = 0;
-    headerData.fileSize = 0;
-    headerData.SubChunk1Size = 0;
-    headerData.AudioFormat = 0;
-    headerData.NumChannels = 0;
-    headerData.SampleRate = 0;
-    headerData.ByteRate = 0;
-    headerData.BlockAlign = 0;
-    headerData.BitsPerSample = 0;
-    headerData.dataSize = 0;
-
     if ( !filename.empty() ) {
         open(filename, openmode);
     }
 }
 
-//////////////////////////////////////////////////////////
+////////////////////////////////////////////
+// Destructor
+////////////////////////////////////////////
 AudioFstream::~AudioFstream (void)
 {
     close();
 }
 
-//////////////////////////////////////////////////////////
+////////////////////////////////////////////
+// FFmpeg error translation
+////////////////////////////////////////////
+string AudioFstream::getFFmpegError(int errnum)
+{
+    char errbuf[AV_ERROR_MAX_STRING_SIZE];
+    av_strerror(errnum, errbuf, AV_ERROR_MAX_STRING_SIZE);
+    return string(errbuf);
+}
+
+////////////////////////////////////////////
+// Open audio file using FFmpeg
+////////////////////////////////////////////
 void AudioFstream::open(const string path, ios_base::openmode mode)
 {
     close();  // Close any existing file
     
-    fileHandle = afOpenFile(path.c_str(), "r", AF_NULL_FILESETUP);
-    
-    if ( fileHandle == AF_NULL_FILEHANDLE ) {
+    // Open input file
+    formatContext = nullptr;
+    int ret = avformat_open_input(&formatContext, path.c_str(), nullptr, nullptr);
+    if (ret < 0) {
         std::cerr << "Unable to find or open file: " << path << endl;
-        CuemsLogger::getLogger()->logError("Couldn't open file : " + path);
+        std::cerr << "FFmpeg error: " << getFFmpegError(ret) << endl;
+        CuemsLogger::getLogger()->logError("Couldn't open file: " + path + " - " + getFFmpegError(ret));
         errorState = true;
         fileOpen = false;
         return;
     }
     
-    CuemsLogger::getLogger()->logOK("File open OK! : " + path);
+    // Retrieve stream information
+    ret = avformat_find_stream_info(formatContext, nullptr);
+    if (ret < 0) {
+        std::cerr << "Could not find stream information: " << getFFmpegError(ret) << endl;
+        CuemsLogger::getLogger()->logError("Could not find stream information: " + getFFmpegError(ret));
+        avformat_close_input(&formatContext);
+        errorState = true;
+        fileOpen = false;
+        return;
+    }
+    
+    // Find the first audio stream
+    audioStreamIndex = -1;
+    for (unsigned int i = 0; i < formatContext->nb_streams; i++) {
+        if (formatContext->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+            audioStreamIndex = i;
+            break;
+        }
+    }
+    
+    if (audioStreamIndex == -1) {
+        std::cerr << "Could not find audio stream in file" << endl;
+        CuemsLogger::getLogger()->logError("No audio stream found in file");
+        avformat_close_input(&formatContext);
+        errorState = true;
+        fileOpen = false;
+        return;
+    }
+    
+    // Get codec parameters
+    AVCodecParameters* codecParams = formatContext->streams[audioStreamIndex]->codecpar;
+    
+    // Find decoder
+    const AVCodec* codec = avcodec_find_decoder(codecParams->codec_id);
+    if (!codec) {
+        std::cerr << "Unsupported codec!" << endl;
+        CuemsLogger::getLogger()->logError("Unsupported codec ID: " + std::to_string(codecParams->codec_id));
+        avformat_close_input(&formatContext);
+        errorState = true;
+        fileOpen = false;
+        return;
+    }
+    
+    // Allocate codec context
+    codecContext = avcodec_alloc_context3(codec);
+    if (!codecContext) {
+        std::cerr << "Failed to allocate codec context" << endl;
+        CuemsLogger::getLogger()->logError("Failed to allocate codec context");
+        avformat_close_input(&formatContext);
+        errorState = true;
+        fileOpen = false;
+        return;
+    }
+    
+    // Copy codec parameters to codec context
+    ret = avcodec_parameters_to_context(codecContext, codecParams);
+    if (ret < 0) {
+        std::cerr << "Failed to copy codec parameters: " << getFFmpegError(ret) << endl;
+        CuemsLogger::getLogger()->logError("Failed to copy codec parameters: " + getFFmpegError(ret));
+        avcodec_free_context(&codecContext);
+        avformat_close_input(&formatContext);
+        errorState = true;
+        fileOpen = false;
+        return;
+    }
+    
+    // Open codec
+    ret = avcodec_open2(codecContext, codec, nullptr);
+    if (ret < 0) {
+        std::cerr << "Failed to open codec: " << getFFmpegError(ret) << endl;
+        CuemsLogger::getLogger()->logError("Failed to open codec: " + getFFmpegError(ret));
+        avcodec_free_context(&codecContext);
+        avformat_close_input(&formatContext);
+        errorState = true;
+        fileOpen = false;
+        return;
+    }
+    
+    // Allocate packet and frame
+    packet = av_packet_alloc();
+    frame = av_frame_alloc();
+    if (!packet || !frame) {
+        std::cerr << "Failed to allocate packet/frame" << endl;
+        CuemsLogger::getLogger()->logError("Failed to allocate packet/frame");
+        cleanupFFmpeg();
+        errorState = true;
+        fileOpen = false;
+        return;
+    }
+    
+    // Extract audio properties
+    fileChannels = codecContext->ch_layout.nb_channels;
+    fileSampleRate = codecContext->sample_rate;
+    
+    // Calculate total samples from duration
+    AVStream* audioStream = formatContext->streams[audioStreamIndex];
+    if (audioStream->duration != AV_NOPTS_VALUE) {
+        totalSamples = av_rescale_q(audioStream->duration, audioStream->time_base, 
+                                    (AVRational){1, (int)fileSampleRate});
+    } else if (formatContext->duration != AV_NOPTS_VALUE) {
+        totalSamples = (int64_t)((double)formatContext->duration / AV_TIME_BASE * fileSampleRate);
+    } else {
+        // Unknown duration, estimate from file size (will be inaccurate for compressed formats)
+        totalSamples = 0;  // Will be updated as we decode
+    }
+    
+    // File size in bytes (32-bit float output for JACK)
+    fileSize = totalSamples * fileChannels * 4;  // 4 bytes per sample (32-bit float)
+    
+    // Setup libswresample for format conversion to float
+    // (FFmpeg decodes to various formats, we need float for libsoxr)
+    AVChannelLayout out_ch_layout = codecContext->ch_layout;
+    
+    ret = swr_alloc_set_opts2(&swrContext,
+                              &out_ch_layout, AV_SAMPLE_FMT_FLT, fileSampleRate,
+                              &codecContext->ch_layout, codecContext->sample_fmt, codecContext->sample_rate,
+                              0, nullptr);
+    
+    if (ret < 0 || !swrContext) {
+        std::cerr << "Failed to create resampler context: " << getFFmpegError(ret) << endl;
+        CuemsLogger::getLogger()->logError("Failed to create resampler context: " + getFFmpegError(ret));
+        cleanupFFmpeg();
+        errorState = true;
+        fileOpen = false;
+        return;
+    }
+    
+    ret = swr_init(swrContext);
+    if (ret < 0) {
+        std::cerr << "Failed to initialize resampler: " << getFFmpegError(ret) << endl;
+        CuemsLogger::getLogger()->logError("Failed to initialize resampler: " + getFFmpegError(ret));
+        cleanupFFmpeg();
+        errorState = true;
+        fileOpen = false;
+        return;
+    }
+    
+    // Allocate conversion buffer (decode → float)
+    conversionBufferSize = 8192 * fileChannels;  // 8192 frames worth
+    conversionBuffer = new float[conversionBufferSize];
+    conversionBufferUsed = 0;
+    conversionBufferPos = 0;
+    
     fileOpen = true;
     errorState = false;
     eofReached = false;
-    currentFramePos = 0;
+    currentSamplePos = 0;
     
-    checkHeader();
-}
-
-//////////////////////////////////////////////////////////
-bool AudioFstream::checkHeader( void ) {
-    if ( !fileOpen || fileHandle == AF_NULL_FILEHANDLE ) {
-        return false;
-    }
-
-    // Get file format information
-    int fileFormat = afGetFileFormat(fileHandle, NULL);
-    
-    // Detect format type (WAV or AIF)
-    if (fileFormat == AF_FILE_WAVE) {
-        strncpy(headerData.RIFFID, "RIFF", 4);
-        strncpy(headerData.WAVEID, "WAVE", 4);
-    } else if (fileFormat == AF_FILE_AIFF || fileFormat == AF_FILE_AIFFC) {
-        strncpy(headerData.RIFFID, "FORM", 4);
-        strncpy(headerData.WAVEID, "AIFF", 4);
-    } else {
-        // Unknown format, use generic identifiers
-        strncpy(headerData.RIFFID, "DATA", 4);
-        strncpy(headerData.WAVEID, "FILE", 4);
+    CuemsLogger::getLogger()->logOK("File open OK! : " + path);
+    CuemsLogger::getLogger()->logOK("Audio codec: " + string(codec->long_name));
+    CuemsLogger::getLogger()->logOK("Sample rate: " + std::to_string(fileSampleRate) + " Hz");
+    CuemsLogger::getLogger()->logOK("Channels: " + std::to_string(fileChannels));
+    CuemsLogger::getLogger()->logOK("Format: " + string(av_get_sample_fmt_name(codecContext->sample_fmt)));
+    if (totalSamples > 0) {
+        CuemsLogger::getLogger()->logOK("Duration: " + std::to_string(totalSamples / (double)fileSampleRate) + " seconds");
     }
     
-    // Get audio parameters
-    fileChannels = afGetChannels(fileHandle, AF_DEFAULT_TRACK);
-    fileSampleRate = (unsigned int)afGetRate(fileHandle, AF_DEFAULT_TRACK);
-    totalFrames = afGetFrameCount(fileHandle, AF_DEFAULT_TRACK);
-    
-    // Get sample format
-    int sampleFormatGet, sampleWidthGet;
-    afGetSampleFormat(fileHandle, AF_DEFAULT_TRACK, &sampleFormatGet, &sampleWidthGet);
-    sampleFormat = sampleFormatGet;
-    sampleWidth = sampleWidthGet;
-    
-    // Set output format to signed 16-bit for compatibility
-    afSetVirtualSampleFormat(fileHandle, AF_DEFAULT_TRACK, AF_SAMPFMT_TWOSCOMP, 16);
-    afSetVirtualChannels(fileHandle, AF_DEFAULT_TRACK, fileChannels);
-    
-    // Populate headerData
-    headerData.NumChannels = fileChannels;
-    headerData.SampleRate = fileSampleRate;
-    headerData.BitsPerSample = 16;  // We convert everything to 16-bit
-    headerData.BlockAlign = fileChannels * 2;  // 2 bytes per sample (16-bit)
-    headerData.ByteRate = fileSampleRate * headerData.BlockAlign;
-    headerData.AudioFormat = 1;  // PCM
-    
-    // Calculate file size in bytes (for 16-bit output)
-    headerData.dataSize = totalFrames * headerData.BlockAlign;
-    headerData.fileSize = headerData.dataSize + 44;  // Approximate header size
-    headerData.RIFFSize = headerData.fileSize - 8;
-    
-    // Estimate header size (this is approximate since libaudiofile handles it)
-    headerSize = 44;  // Standard WAV header size
-    
-    CuemsLogger::getLogger()->logOK("Audio file OK! Sample rate: " + std::to_string(fileSampleRate) + 
-                                     " Hz, Channels: " + std::to_string(fileChannels) +
-                                     ", Bits: " + std::to_string(sampleWidthGet * 8) +
-                                     " (converting to 16-bit)");
-    CuemsLogger::getLogger()->logOK("File size : " + std::to_string(headerData.fileSize));
-    
-    return true;
+    // Initialize resampler if target sample rate is already set
+    if (targetSampleRate > 0 && targetSampleRate != fileSampleRate) {
+        initializeResampler();
+    }
 }
 
-//////////////////////////////////////////////////////////
+////////////////////////////////////////////
+// Load file (wrapper for open)
+////////////////////////////////////////////
 bool AudioFstream::loadFile( const string path ) {
     open( path, ios_base::binary | ios_base::in );
-    
-    if ( !fileOpen ) {
+    return fileOpen && !errorState;
+}
+
+////////////////////////////////////////////
+// Decode next frame from FFmpeg
+////////////////////////////////////////////
+bool AudioFstream::decodeNextFrame()
+{
+    if (!fileOpen || eofReached) {
         return false;
     }
     
-    return checkHeader();
+    while (true) {
+        // Read packet
+        int ret = av_read_frame(formatContext, packet);
+        
+        if (ret < 0) {
+            if (ret == AVERROR_EOF) {
+                eofReached = true;
+                // Flush decoder
+                avcodec_send_packet(codecContext, nullptr);
+            } else {
+                std::cerr << "Error reading frame: " << getFFmpegError(ret) << endl;
+                errorState = true;
+                return false;
+            }
+        }
+        
+        // Skip non-audio packets
+        if (ret >= 0 && packet->stream_index != audioStreamIndex) {
+            av_packet_unref(packet);
+            continue;
+        }
+        
+        // Send packet to decoder
+        if (ret >= 0) {
+            ret = avcodec_send_packet(codecContext, packet);
+            av_packet_unref(packet);
+            
+            if (ret < 0) {
+                std::cerr << "Error sending packet to decoder: " << getFFmpegError(ret) << endl;
+                errorState = true;
+                return false;
+            }
+        }
+        
+        // Receive decoded frame
+        ret = avcodec_receive_frame(codecContext, frame);
+        
+        if (ret == AVERROR(EAGAIN)) {
+            // Need more packets
+            if (eofReached) {
+                return false;  // No more data
+            }
+            continue;
+        } else if (ret == AVERROR_EOF) {
+            eofReached = true;
+            return false;
+        } else if (ret < 0) {
+            std::cerr << "Error receiving frame from decoder: " << getFFmpegError(ret) << endl;
+            errorState = true;
+            return false;
+        }
+        
+        // Successfully decoded a frame
+        return true;
+    }
 }
 
-//////////////////////////////////////////////////////////
+////////////////////////////////////////////
+// Read data from audio file
+////////////////////////////////////////////
 void AudioFstream::read(char* buffer, size_t bytes)
 {
     lastBytesRead = 0;
-    lastReadFrames = 0;
     
-    if (!fileOpen || fileHandle == AF_NULL_FILEHANDLE || eofReached) {
+    if (!fileOpen || errorState) {
+        std::cerr << "DEBUG audiofstream read: fileOpen=" << fileOpen << " errorState=" << errorState << std::endl;
         return;
     }
     
-    // Calculate how many frames we need to read
-    size_t bytesPerFrame = fileChannels * 2;  // 2 bytes per sample (16-bit)
-    size_t framesToRead = bytes / bytesPerFrame;
+    size_t bytesRemaining = bytes;
+    float* outputPtr = (float*)buffer;
     
-    if (framesToRead == 0) {
-        return;
-    }
+    // Calculate how many samples we need (32-bit float output)
+    size_t samplesNeeded = bytes / 4;  // 4 bytes per 32-bit float sample
     
-    if (!resamplingEnabled || targetSampleRate == 0 || targetSampleRate == fileSampleRate) {
-        // Direct reading without resampling
-        AFframecount framesRead = afReadFrames(fileHandle, AF_DEFAULT_TRACK, buffer, framesToRead);
-        lastReadFrames = framesRead;
-        lastBytesRead = framesRead * bytesPerFrame;
-        currentFramePos += framesRead;
+    // If resampling is enabled, we need to work with floats through the resampling pipeline
+    if (resamplingEnabled && resampler) {
+        // samplesNeeded is the total number of samples across all channels (for interleaved audio)
+        // Calculate how many complete frames we need
+        size_t framesNeeded = samplesNeeded / fileChannels;
+        size_t resampledFloatsNeeded = framesNeeded * fileChannels;
         
-        if (framesRead < (AFframecount)framesToRead) {
-            eofReached = true;
+        std::cerr << "DEBUG audiofstream read: resampling path - bytes=" << bytes 
+                  << " samplesNeeded=" << samplesNeeded
+                  << " framesNeeded=" << framesNeeded 
+                  << " resampledFloatsNeeded=" << resampledFloatsNeeded 
+                  << " eofReached=" << eofReached << std::endl;
+        
+        float* tempFloatBuffer = new float[resampledFloatsNeeded];
+        size_t floatsResampled = 0;
+        
+        static int resample_loop_counter = 0;
+        while (floatsResampled < resampledFloatsNeeded && !eofReached) {
+            if (resample_loop_counter++ < 5) {
+                std::cerr << "DEBUG audiofstream read: resampling loop - floatsResampled=" << floatsResampled 
+                          << " needed=" << resampledFloatsNeeded 
+                          << " convBufPos=" << conversionBufferPos 
+                          << " convBufUsed=" << conversionBufferUsed << std::endl;
+            }
+            // First, ensure we have decoded float data in conversionBuffer
+            while (conversionBufferPos >= conversionBufferUsed && !eofReached) {
+                // Need to decode more data
+                if (decodeNextFrame()) {
+                    // Convert decoded frame to float
+                    uint8_t* out = (uint8_t*)conversionBuffer;
+                    int out_samples = swr_convert(swrContext, &out, frame->nb_samples,
+                                                 (const uint8_t**)frame->data, frame->nb_samples);
+                    
+                    if (out_samples < 0) {
+                        std::cerr << "Error converting audio samples" << endl;
+                        errorState = true;
+                        av_frame_unref(frame);
+                        break;
+                    }
+                    
+                    conversionBufferUsed = out_samples * fileChannels;
+                    conversionBufferPos = 0;
+                    av_frame_unref(frame);
+                } else {
+                    break;  // EOF or error
+                }
+            }
+            
+            if (conversionBufferPos >= conversionBufferUsed) {
+                break;  // No more data available
+            }
+            
+            // Feed available float data to libsoxr
+            size_t floatsAvailable = conversionBufferUsed - conversionBufferPos;
+            size_t floatsToResample = std::min(floatsAvailable, resampledFloatsNeeded - floatsResampled);
+            size_t framesAvailable = floatsAvailable / fileChannels;
+            size_t framesInThisPass = floatsToResample / fileChannels;
+            
+            size_t inputFramesUsed = 0;
+            size_t outputFramesGenerated = 0;
+            
+            soxr_error_t soxr_err = soxr_process(resampler,
+                                                 conversionBuffer + conversionBufferPos, framesInThisPass, &inputFramesUsed,
+                                                 tempFloatBuffer + floatsResampled, framesNeeded - (floatsResampled / fileChannels), &outputFramesGenerated);
+            
+            if (soxr_err) {
+                std::cerr << "SOXR error: " << soxr_strerror(soxr_err) << endl;
+                CuemsLogger::getLogger()->logError("Resampling error: " + string(soxr_strerror(soxr_err)));
+                errorState = true;
+                break;
+            }
+            
+            conversionBufferPos += inputFramesUsed * fileChannels;
+            floatsResampled += outputFramesGenerated * fileChannels;
+            
+            if (outputFramesGenerated == 0 && inputFramesUsed == 0) {
+                break;  // No progress
+            }
         }
+        
+        // Copy resampled floats directly to output (JACK native format)
+        static int copy_counter = 0;
+        for (size_t i = 0; i < floatsResampled && i < samplesNeeded; i++) {
+            outputPtr[i] = tempFloatBuffer[i];
+            lastBytesRead += 4;  // 4 bytes per float
+        }
+        
+        if (copy_counter++ < 3) {
+            std::cerr << "DEBUG audiofstream: Copied " << std::min(floatsResampled, samplesNeeded) 
+                      << " floats to output, lastBytesRead=" << lastBytesRead 
+                      << " sample values: " << (floatsResampled > 0 ? tempFloatBuffer[0] : 0.0f) 
+                      << ", " << (floatsResampled > 1 ? tempFloatBuffer[1] : 0.0f) << std::endl;
+        }
+        
+        delete[] tempFloatBuffer;
+        
     } else {
-        // Reading with resampling
-        // Calculate input frames needed based on sample rate ratio
-        double ratio = (double)targetSampleRate / (double)fileSampleRate;
-        size_t inputFramesNeeded = (size_t)(framesToRead / ratio) + 1;
-        
-        // Allocate or resize buffers if needed
-        size_t neededBufferSize = std::max(inputFramesNeeded, framesToRead) * fileChannels;
-        if (resampleBufferSize < neededBufferSize) {
-            delete[] resampleInputBuffer;
-            delete[] resampleOutputBuffer;
-            resampleBufferSize = neededBufferSize * 2;  // Allocate extra
-            resampleInputBuffer = new float[resampleBufferSize];
-            resampleOutputBuffer = new float[resampleBufferSize];
-        }
-        
-        // Read frames from file and convert to float
-        int16_t* tempBuffer = new int16_t[inputFramesNeeded * fileChannels];
-        AFframecount framesRead = afReadFrames(fileHandle, AF_DEFAULT_TRACK, tempBuffer, inputFramesNeeded);
-        currentFramePos += framesRead;
-        
-        if (framesRead == 0) {
-            delete[] tempBuffer;
-            eofReached = true;
-            return;
-        }
-        
-        // Convert int16 to float [-1.0, 1.0]
-        for (size_t i = 0; i < framesRead * fileChannels; i++) {
-            resampleInputBuffer[i] = tempBuffer[i] / 32768.0f;
-        }
-        delete[] tempBuffer;
-        
-        // Perform resampling
-        size_t inputFramesDone = 0;
-        size_t outputFramesDone = 0;
-        
-        soxr_error_t error = soxr_process(resampler, 
-                                          resampleInputBuffer, framesRead, &inputFramesDone,
-                                          resampleOutputBuffer, framesToRead, &outputFramesDone);
-        
-        if (error) {
-            CuemsLogger::getLogger()->logError("Resampling error: " + string(error));
-            errorState = true;
-            delete[] tempBuffer;
-            return;
-        }
-        
-        // Convert float back to int16
-        int16_t* outputBuffer = (int16_t*)buffer;
-        for (size_t i = 0; i < outputFramesDone * fileChannels; i++) {
-            float sample = resampleOutputBuffer[i] * 32768.0f;
-            sample = std::max(-32768.0f, std::min(32767.0f, sample));  // Clamp
-            outputBuffer[i] = (int16_t)sample;
-        }
-        
-        lastReadFrames = outputFramesDone;
-        lastBytesRead = outputFramesDone * bytesPerFrame;
-        
-        if (framesRead < (AFframecount)inputFramesNeeded) {
-            eofReached = true;
+        // No resampling - direct decode and output as float
+        while (bytesRemaining > 0 && !eofReached) {
+            // Ensure we have decoded float data
+            while (conversionBufferPos >= conversionBufferUsed && !eofReached) {
+                if (decodeNextFrame()) {
+                    // Convert decoded frame to float
+                    uint8_t* out = (uint8_t*)conversionBuffer;
+                    int out_samples = swr_convert(swrContext, &out, frame->nb_samples,
+                                                 (const uint8_t**)frame->data, frame->nb_samples);
+                    
+                    if (out_samples < 0) {
+                        std::cerr << "Error converting audio samples" << endl;
+                        errorState = true;
+                        av_frame_unref(frame);
+                        break;
+                    }
+                    
+                    conversionBufferUsed = out_samples * fileChannels;
+                    conversionBufferPos = 0;
+                    av_frame_unref(frame);
+                } else {
+                    break;
+                }
+            }
+            
+            if (conversionBufferPos >= conversionBufferUsed) {
+                break;  // No more data
+            }
+            
+            // Copy floats directly to output (JACK native format)
+            size_t floatsAvailable = conversionBufferUsed - conversionBufferPos;
+            size_t floatsToCopy = std::min(floatsAvailable, samplesNeeded - (lastBytesRead / 4));
+            
+            memcpy(outputPtr, conversionBuffer + conversionBufferPos, floatsToCopy * sizeof(float));
+            outputPtr += floatsToCopy;
+            lastBytesRead += floatsToCopy * 4;  // 4 bytes per float
+            bytesRemaining -= floatsToCopy * 4;
+            
+            conversionBufferPos += floatsToCopy;
         }
     }
+    
+    currentSamplePos += lastBytesRead / 4;  // Track position in samples (4 bytes per float)
 }
 
-//////////////////////////////////////////////////////////
+////////////////////////////////////////////
+// Seek to position
+////////////////////////////////////////////
 void AudioFstream::seekg(long long pos, ios_base::seekdir dir)
 {
-    if (!fileOpen || fileHandle == AF_NULL_FILEHANDLE) {
+    if (!fileOpen || !formatContext) {
+        std::cerr << "DEBUG audiofstream: seekg failed - fileOpen=" << fileOpen << " formatContext=" << (formatContext != nullptr) << std::endl;
         return;
     }
     
-    AFframecount targetFrame = 0;
-    size_t bytesPerFrame = fileChannels * 2;  // 2 bytes per sample (16-bit)
+    long long targetBytePos = 0;
     
+    // Calculate absolute byte position
     if (dir == ios_base::beg) {
-        // Convert byte position to frame position
-        targetFrame = pos / bytesPerFrame;
+        targetBytePos = pos;
     } else if (dir == ios_base::cur) {
-        targetFrame = currentFramePos + (pos / bytesPerFrame);
+        targetBytePos = currentSamplePos * 4 + pos;  // currentSamplePos is in samples, *4 for bytes (float)
     } else if (dir == ios_base::end) {
-        targetFrame = totalFrames + (pos / bytesPerFrame);
+        // Use getFileSize() to get the correct size (accounting for resampling)
+        targetBytePos = (long long)getFileSize() + pos;
     }
     
-    // Clamp to valid range
-    if (targetFrame < 0) targetFrame = 0;
-    if (targetFrame > totalFrames) targetFrame = totalFrames;
+    std::cerr << "DEBUG audiofstream: seekg targetBytePos=" << targetBytePos << " fileSize=" << getFileSize() << std::endl;
     
-    AFframecount result = afSeekFrame(fileHandle, AF_DEFAULT_TRACK, targetFrame);
-    if (result >= 0) {
-        currentFramePos = result;
-        eofReached = false;
-        
-        // Reset resampler state if resampling is enabled
-        if (resamplingEnabled && resampler) {
-            // Flush resampler
-            soxr_process(resampler, NULL, 0, NULL, NULL, 0, NULL);
-        }
-    } else {
-        CuemsLogger::getLogger()->logError("Seek failed");
+    // Convert byte position to sample position (32-bit float samples)
+    int64_t targetSamplePos = targetBytePos / 4;
+    
+    std::cerr << "DEBUG audiofstream: seekg targetSamplePos=" << targetSamplePos << " totalSamples=" << totalSamples << std::endl;
+    
+    // Account for resampling ratio
+    int64_t fileSamplePos = targetSamplePos;
+    if (resamplingEnabled && targetSampleRate > 0) {
+        fileSamplePos = (int64_t)((double)targetSamplePos * fileSampleRate / targetSampleRate);
+        std::cerr << "DEBUG audiofstream: resampling enabled, fileSamplePos=" << fileSamplePos 
+                  << " (rate " << fileSampleRate << "→" << targetSampleRate << ")" << std::endl;
+    }
+    
+    // Convert to timestamp
+    int64_t targetTimestamp = av_rescale_q(fileSamplePos / fileChannels, 
+                                          (AVRational){1, (int)fileSampleRate},
+                                          formatContext->streams[audioStreamIndex]->time_base);
+    
+    std::cerr << "DEBUG audiofstream: seeking to timestamp=" << targetTimestamp << " fileSamplePos=" << fileSamplePos << std::endl;
+    
+    // Seek
+    int ret = av_seek_frame(formatContext, audioStreamIndex, targetTimestamp, AVSEEK_FLAG_BACKWARD);
+    
+    std::cerr << "DEBUG audiofstream: av_seek_frame returned " << ret << std::endl;
+    
+    if (ret < 0) {
+        std::cerr << "Seek error: " << getFFmpegError(ret) << endl;
+        CuemsLogger::getLogger()->logError("Seek error: " + getFFmpegError(ret));
         errorState = true;
+        return;
     }
+    
+    // Flush codec buffers
+    avcodec_flush_buffers(codecContext);
+    
+    // Reset conversion buffer
+    conversionBufferUsed = 0;
+    conversionBufferPos = 0;
+    
+    // Clear EOF flag
+    eofReached = false;
+    
+    // Update current position
+    currentSamplePos = targetSamplePos;
 }
 
-//////////////////////////////////////////////////////////
+////////////////////////////////////////////
+// Get count of last read
+////////////////////////////////////////////
 streamsize AudioFstream::gcount() const
 {
     return lastBytesRead;
 }
 
-//////////////////////////////////////////////////////////
+////////////////////////////////////////////
+// Check if EOF reached
+////////////////////////////////////////////
 bool AudioFstream::eof() const
 {
-    return eofReached;
+    return eofReached || (conversionBufferPos >= conversionBufferUsed && eofReached);
 }
 
-//////////////////////////////////////////////////////////
+////////////////////////////////////////////
+// Check if stream is good
+////////////////////////////////////////////
 bool AudioFstream::good() const
 {
     return fileOpen && !errorState && !eofReached;
 }
 
-//////////////////////////////////////////////////////////
+////////////////////////////////////////////
+// Check if stream has error
+////////////////////////////////////////////
 bool AudioFstream::bad() const
 {
     return errorState;
 }
 
-//////////////////////////////////////////////////////////
+////////////////////////////////////////////
+// Clear error states
+////////////////////////////////////////////
 void AudioFstream::clear()
 {
-    eofReached = false;
     errorState = false;
+    eofReached = false;
 }
 
-//////////////////////////////////////////////////////////
+////////////////////////////////////////////
+// Cleanup FFmpeg resources
+////////////////////////////////////////////
+void AudioFstream::cleanupFFmpeg()
+{
+    if (frame) {
+        av_frame_free(&frame);
+    }
+    if (packet) {
+        av_packet_free(&packet);
+    }
+    if (codecContext) {
+        avcodec_free_context(&codecContext);
+    }
+    if (formatContext) {
+        avformat_close_input(&formatContext);
+    }
+    if (swrContext) {
+        swr_free(&swrContext);
+    }
+    if (conversionBuffer) {
+        delete[] conversionBuffer;
+        conversionBuffer = nullptr;
+    }
+    
+    audioStreamIndex = -1;
+    conversionBufferSize = 0;
+    conversionBufferUsed = 0;
+    conversionBufferPos = 0;
+}
+
+////////////////////////////////////////////
+// Close file
+////////////////////////////////////////////
 void AudioFstream::close()
 {
-    if (fileOpen && fileHandle != AF_NULL_FILEHANDLE) {
-        afCloseFile(fileHandle);
-        fileHandle = AF_NULL_FILEHANDLE;
-        fileOpen = false;
-    }
-    
+    cleanupFFmpeg();
     cleanupResampler();
     
+    fileOpen = false;
     eofReached = false;
     errorState = false;
-    currentFramePos = 0;
+    fileChannels = 0;
+    fileSampleRate = 0;
+    totalSamples = 0;
+    fileSize = 0;
+    currentSamplePos = 0;
+    lastBytesRead = 0;
 }
 
-//////////////////////////////////////////////////////////
+////////////////////////////////////////////
+// File information accessors
+////////////////////////////////////////////
+unsigned long long AudioFstream::getFileSize() const
+{
+    // If resampling is enabled, return the effective output size at target sample rate
+    // This ensures boundary checks compare values at the same sample rate
+    if (resamplingEnabled && targetSampleRate > 0 && fileSampleRate > 0 && totalSamples > 0) {
+        // Calculate output samples at target sample rate (same duration, different sample count)
+        int64_t outputSamples = (int64_t)((double)totalSamples * targetSampleRate / fileSampleRate);
+        return outputSamples * fileChannels * 4;  // 4 bytes per sample (32-bit float)
+    }
+    
+    // No resampling - return original file size
+    return fileSize;
+}
+
+unsigned int AudioFstream::getChannels() const
+{
+    return fileChannels;
+}
+
+unsigned int AudioFstream::getSampleRate() const
+{
+    return fileSampleRate;
+}
+
+unsigned int AudioFstream::getBitsPerSample() const
+{
+    return 32;  // Always output 32-bit float for JACK
+}
+
+////////////////////////////////////////////
+// Set target sample rate (for resampling)
+////////////////////////////////////////////
 void AudioFstream::setTargetSampleRate(unsigned int rate)
 {
+    if (targetSampleRate == rate) {
+        return;  // No change
+    }
+    
     targetSampleRate = rate;
     
-    if (fileOpen && fileSampleRate != 0) {
-        if (targetSampleRate != fileSampleRate) {
-            CuemsLogger::getLogger()->logInfo("Sample rate conversion needed: " + 
-                                               std::to_string(fileSampleRate) + " Hz -> " + 
-                                               std::to_string(targetSampleRate) + " Hz");
-            initializeResampler();
-        } else {
-            CuemsLogger::getLogger()->logInfo("Sample rates match: " + 
-                                               std::to_string(fileSampleRate) + " Hz, no resampling needed");
-            resamplingEnabled = false;
-            cleanupResampler();
-        }
+    if (!fileOpen) {
+        return;  // Will initialize when file is opened
+    }
+    
+    // Reinitialize resampler if needed
+    if (targetSampleRate > 0 && targetSampleRate != fileSampleRate) {
+        initializeResampler();
+    } else {
+        // No resampling needed
+        cleanupResampler();
+        resamplingEnabled = false;
     }
 }
 
-//////////////////////////////////////////////////////////
+////////////////////////////////////////////
+// Set resampling quality
+////////////////////////////////////////////
 void AudioFstream::setResampleQuality(const string& quality)
 {
     qualitySpec = parseQualityString(quality);
     
-    // If resampler already exists, recreate it with new quality
-    if (resamplingEnabled && resampler) {
-        cleanupResampler();
+    // If resampler is already initialized, recreate it with new quality
+    if (resampler != nullptr) {
         initializeResampler();
     }
 }
 
-//////////////////////////////////////////////////////////
+////////////////////////////////////////////
+// Parse quality string
+////////////////////////////////////////////
 soxr_quality_spec_t AudioFstream::parseQualityString(const string& quality)
 {
     if (quality == "vhq") {
-        CuemsLogger::getLogger()->logInfo("Resampling quality: Very High (VHQ)");
         return soxr_quality_spec(SOXR_VHQ, 0);
     } else if (quality == "hq") {
-        CuemsLogger::getLogger()->logInfo("Resampling quality: High (HQ)");
         return soxr_quality_spec(SOXR_HQ, 0);
     } else if (quality == "mq") {
-        CuemsLogger::getLogger()->logInfo("Resampling quality: Medium (MQ)");
         return soxr_quality_spec(SOXR_MQ, 0);
     } else if (quality == "lq") {
-        CuemsLogger::getLogger()->logInfo("Resampling quality: Low (LQ)");
         return soxr_quality_spec(SOXR_LQ, 0);
     } else {
-        CuemsLogger::getLogger()->logWarning("Unknown quality '" + quality + "', defaulting to High (HQ)");
+        CuemsLogger::getLogger()->logError("Invalid resample quality: " + quality + ", using HQ");
         return soxr_quality_spec(SOXR_HQ, 0);
     }
 }
 
-//////////////////////////////////////////////////////////
+////////////////////////////////////////////
+// Initialize resampler
+////////////////////////////////////////////
 void AudioFstream::initializeResampler()
 {
-    if (!fileOpen || targetSampleRate == 0 || fileSampleRate == 0) {
-        return;
-    }
+    cleanupResampler();
     
-    if (targetSampleRate == fileSampleRate) {
+    if (targetSampleRate == 0 || targetSampleRate == fileSampleRate) {
         resamplingEnabled = false;
         return;
     }
     
-    cleanupResampler();
-    
     soxr_error_t error;
-    soxr_io_spec_t ioSpec = soxr_io_spec(SOXR_FLOAT32_I, SOXR_FLOAT32_I);
+    soxr_io_spec_t io_spec = soxr_io_spec(SOXR_FLOAT32_I, SOXR_FLOAT32_I);
     
-    resampler = soxr_create((double)fileSampleRate, (double)targetSampleRate, 
-                           fileChannels, &error, &ioSpec, &qualitySpec, NULL);
+    resampler = soxr_create(fileSampleRate, targetSampleRate, fileChannels,
+                           &error, &io_spec, &qualitySpec, nullptr);
     
     if (error || !resampler) {
-        CuemsLogger::getLogger()->logError("Failed to create resampler: " + string(error ? error : "unknown error"));
-        errorState = true;
+        std::cerr << "Failed to create resampler: " << (error ? error : "unknown error") << endl;
+        CuemsLogger::getLogger()->logError("Failed to create resampler");
         resamplingEnabled = false;
         return;
     }
     
     resamplingEnabled = true;
-    CuemsLogger::getLogger()->logOK("Resampler initialized successfully");
+    
+    // Allocate resampling buffers
+    resampleBufferSize = 8192 * fileChannels;  // 8192 frames worth
+    resampleInputBuffer = new float[resampleBufferSize];
+    resampleOutputBuffer = new float[resampleBufferSize];
+    
+    CuemsLogger::getLogger()->logOK("Resampler initialized: " + std::to_string(fileSampleRate) + 
+                                    " Hz -> " + std::to_string(targetSampleRate) + " Hz");
 }
 
-//////////////////////////////////////////////////////////
+////////////////////////////////////////////
+// Cleanup resampler
+////////////////////////////////////////////
 void AudioFstream::cleanupResampler()
 {
     if (resampler) {
         soxr_delete(resampler);
         resampler = nullptr;
     }
-    
     if (resampleInputBuffer) {
         delete[] resampleInputBuffer;
         resampleInputBuffer = nullptr;
     }
-    
     if (resampleOutputBuffer) {
         delete[] resampleOutputBuffer;
         resampleOutputBuffer = nullptr;
     }
-    
     resampleBufferSize = 0;
     resamplingEnabled = false;
 }

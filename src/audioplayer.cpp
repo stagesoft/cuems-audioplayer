@@ -72,7 +72,7 @@ AudioPlayer::AudioPlayer(   int port,
 
     //////////////////////////////////////////////////////////
     // Set up working class members
-    
+
     // Set resample quality before opening audio stream
     audioFile.setResampleQuality(resampleQuality);
 
@@ -84,7 +84,7 @@ AudioPlayer::AudioPlayer(   int port,
     // Adjust initial offset
     //      NOTE: Hardcoded 50 ms offset while testing sync with Xjadeo
     headOffset = (initOffset + XJADEO_ADJUSTMENT) * audioMillisecondSize;
-    headOffset += audioFile.headerSize;
+    // Note: With FFmpeg, headers are handled internally - no manual offset needed
 
     // If we have a positive offset initialli we can already
     // seek the file to its proper initial position
@@ -97,8 +97,8 @@ AudioPlayer::AudioPlayer(   int port,
         volumeMaster[i] = 1.0;
     }
 
-    // Per channel process buffer
-    intermediate = new short int[nChannels];
+    // Per channel process buffer (32-bit float for JACK)
+    intermediate = new float[nChannels];
 
 
     //////////////////////////////////////////////////////////
@@ -161,7 +161,7 @@ AudioPlayer::AudioPlayer(   int port,
     try {
         audio.openStream(  &streamParams, 
                             NULL, 
-                            RTAUDIO_SINT16, 
+                            RTAUDIO_FLOAT32,  // JACK's native format
                             sampleRate, 
                             &bufferFrames, 
                             &audioCallback,
@@ -183,7 +183,7 @@ AudioPlayer::AudioPlayer(   int port,
             
             // Recalculate offset with correct sample rate
             headOffset = (initOffset + XJADEO_ADJUSTMENT) * audioMillisecondSize;
-            headOffset += audioFile.headerSize;
+            // Note: With FFmpeg, headers are handled internally - no manual offset needed
         } else if (jackSampleRate != 0) {
             CuemsLogger::getLogger()->logInfo("JACK sample rate: " + std::to_string(jackSampleRate) + " Hz");
         }
@@ -227,6 +227,14 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
             double /*streamTime*/, RtAudioStreamStatus /*status*/, void *data ) {
 
     AudioPlayer *ap = (AudioPlayer*) data;
+
+    static int callback_counter = 0;
+    if (callback_counter++ < 3) {
+        std::cerr << "DEBUG: audioCallback called, nBufferFrames=" << nBufferFrames 
+                  << " followingMtc=" << ap->followingMtc 
+                  << " mtcRunning=" << ap->mtcReceiver.isTimecodeRunning 
+                  << " playheadControl=" << ap->playheadControl << std::endl;
+    }
 
     // If we are receiving MTC and following it...
     // Or we are not receiving it and we do not stop on its lost
@@ -275,29 +283,42 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
             // If our audio play head is too late or out of the boundaries of our mtc frame
             // tollerance... We correct it. Also if the offset changed dinamically via OSC
             if ( abs(difference) > tollerance || ap->offsetChanged ) {
-                // Set new head
-                ap->playHead = mtcHeadInBytes;
-
                 // Set new OSC offset if any
                 if ( ap->offsetChanged ) {
                     ap->headOffset = ap->headNewOffset;
                     // And reset flag
                     ap->offsetChanged = false;
-                    ap->outOfFile = true;
+                    // Note: Don't set outOfFile here - let the boundary check below determine that
                 }
 
-                // Seek the file with the new coordinates
-                if ( ( (ap->playHead + ap->headOffset) >= 0 ) && 
-                        ( (ap->playHead + ap->headOffset) <= (long long) ap->audioFile.headerData.fileSize ) ){
+                // Calculate the actual seek position in the file (accounting for offset)
+                long long seekPosition = mtcHeadInBytes + ap->headOffset;
+                unsigned long long fileSize = ap->audioFile.getFileSize();
+                
+                // Debug logging for boundary check
+                std::cerr << "DEBUG: Boundary check - seekPos=" << seekPosition 
+                          << " fileSize=" << fileSize 
+                          << " valid=" << (seekPosition >= 0 && seekPosition <= (long long)fileSize) << std::endl;
+                CuemsLogger::getLogger()->logInfo("Boundary check: seekPos=" + std::to_string(seekPosition) + 
+                                                   " fileSize=" + std::to_string(fileSize) +
+                                                   " valid=" + std::to_string(seekPosition >= 0 && seekPosition <= (long long)fileSize));
+                
+                if ( (seekPosition >= 0) && (seekPosition <= (long long)fileSize) ){
 
                     ap->endOfStream = false;
                     ap->outOfFile = false;
                     if ( ap->audioFile.eof() ) {
                         ap->audioFile.clear();
                     } 
-                    ap->audioFile.seekg( ap->playHead + ap->headOffset , ios_base::beg );
+                    // Seek to the calculated position
+                    ap->audioFile.seekg( seekPosition , ios_base::beg );
+                    // Update playHead to match where we actually are (without offset, as offset is separate)
+                    ap->playHead = seekPosition - ap->headOffset;
+                    std::cerr << "DEBUG: Seek successful to " << seekPosition << ", playHead now=" << ap->playHead << std::endl;
                 }
                 else {
+                    std::cerr << "DEBUG: Out of file boundaries!" << std::endl;
+                    CuemsLogger::getLogger()->logInfo("Out of file boundaries!");
                     if ( ap->audioFile.eof() ){} ap->audioFile.clear();
                     ap->endOfStream = true;
                     ap->outOfFile = true;
@@ -310,24 +331,24 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
         //      while we are not out of the file boundaries
         if ( !ap->outOfFile ) {
             for ( unsigned int i = 0; i < nBufferFrames; i++ ) {
-                // Per channel reading
+                // Read a complete frame (all channels at once) - required for FFmpeg/resampling
                 read = 0;
-                for ( unsigned int i = 0; i < ap->nChannels; i++) {
-                    // Read operation to the intermediate buffer, we read the size of our 
-                    // sample by the number of channels times, from file
-                    // read += fread( &intermediate[i], 1, ap->headStep, file );
-                    if ( (ap->playHead + ap->headOffset) >= 0 ) {
-                        ap->audioFile.read((char*) &ap->intermediate[i], ap->headStep);
-                        read += ap->audioFile.gcount();
+                if ( (ap->playHead + ap->headOffset) >= 0 ) {
+                    // Read all channels for this frame in one call
+                    ap->audioFile.read((char*) ap->intermediate, ap->audioFrameSize);
+                    read = ap->audioFile.gcount();
 
-                        ap->intermediate[i] *= ap->volumeMaster[i];
+                    // Apply volume to each channel
+                    for ( unsigned int ch = 0; ch < ap->nChannels; ch++) {
+                        ap->intermediate[ch] *= ap->volumeMaster[ch];
                     }
-                    else {
-                        ap->intermediate[i] = 0;
-
-                        read += ap->headStep;
+                }
+                else {
+                    // Before file start - fill with silence
+                    for ( unsigned int ch = 0; ch < ap->nChannels; ch++) {
+                        ap->intermediate[ch] = 0;
                     }
-
+                    read = ap->audioFrameSize;
                 }
 
                 memcpy((char *)outputBuffer + count, ap->intermediate, ap->audioFrameSize);
@@ -347,6 +368,8 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
         if ( count < nBufferFrames ) {
             unsigned long int bytes = (nBufferFrames - count) * ap->audioFrameSize;
             unsigned long int startByte = count * ap->audioFrameSize;
+            
+            std::cerr << "DEBUG: Filling silence - count=" << count << " nBufferFrames=" << nBufferFrames << std::endl;
 
             memset( (char *)(outputBuffer) + startByte, 0, bytes );
 
@@ -355,6 +378,7 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
 
         // If we did not read anything, we are out of boundaries, maybe...
         if ( count == 0 ) {
+            std::cerr << "DEBUG: count=0, exiting! outOfFile=" << ap->outOfFile << " endOfStream=" << ap->endOfStream << std::endl;
             // Maybe it is the end of the stream
             if ( ap->endWaitTime == 0 ) {
                 // If there is not waiting time, we just finish
@@ -401,6 +425,11 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
     // If we are not playing audio... Just copy silence...
     else
     {
+        static int silence_counter = 0;
+        if (silence_counter++ < 3) {
+            std::cerr << "DEBUG: In silence branch - not playing audio" << std::endl;
+        }
+        
         // Check play control flags
         // if we already started and we have no MTC signal, and it was 
         // already lost, it is lost now
@@ -470,8 +499,7 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
 
             headNewOffset = ( offsetOSC + XJADEO_ADJUSTMENT ) * audioMillisecondSize;             // To bytes
 
-            // Plus the standard header size
-            headNewOffset += audioFile.headerSize;
+            // Note: With FFmpeg, headers are handled internally - no manual offset needed
 
             offsetChanged = true;
 

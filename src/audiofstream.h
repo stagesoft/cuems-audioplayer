@@ -34,8 +34,15 @@
 #include <vector>
 #include <iomanip>
 #include <string>
-#include <audiofile.h>
 #include <soxr.h>
+
+extern "C" {
+#include <libavformat/avformat.h>
+#include <libavcodec/avcodec.h>
+#include <libavutil/avutil.h>
+#include <libswresample/swresample.h>
+}
+
 #include "cuemslogger.h"
 #include "cuems_errors.h"
 
@@ -43,42 +50,13 @@ using namespace std;
 
 class AudioFstream
 {
-    typedef struct {
-        char id[5] = "    ";
-        unsigned long int size = 0;
-    } subChunk;
-
     public:
         AudioFstream(   const string filename = "", 
                         ios_base::openmode openmode = ios_base::in | ios_base::binary );
         ~AudioFstream();
 
-        struct headerData {
-            // "RIFF" & "WAVE" headers
-            char RIFFID[5] = "    ";
-            unsigned long int RIFFSize = 0;
-            unsigned long int fileSize = 0;
-            char WAVEID[5] = "    ";
-
-            // "fmt " header data
-            unsigned long int SubChunk1Size = 0;
-            unsigned int AudioFormat = 0;
-            unsigned int NumChannels = 0;
-            unsigned long int SampleRate = 0;
-            unsigned long int ByteRate = 0;
-            unsigned int BlockAlign = 0;
-            unsigned int BitsPerSample = 0;
-            
-            vector<subChunk> subHeaders;
-
-            unsigned long int dataSize = 0;
-        } headerData;
-
-        bool checkHeader( void );
-        bool loadFile( const string path );
-        
         // Stream-like interface for compatibility
-        void read(char* buffer, size_t bytes);
+        void read(char* buffer, size_t bytes);  // Outputs 32-bit float samples
         void seekg(long long pos, ios_base::seekdir dir);
         streamsize gcount() const;
         bool eof() const;
@@ -87,29 +65,48 @@ class AudioFstream
         void clear();
         void close();
         void open(const string path, ios_base::openmode mode);
+        bool loadFile( const string path );
 
-        unsigned int headerSize = 0;
-
-        // New methods for resampling
+        // Methods for resampling
         void setTargetSampleRate(unsigned int rate);
         void setResampleQuality(const string& quality);
+        
+        // File information accessors (for compatibility with audioplayer.cpp)
+        unsigned long long getFileSize() const;
+        unsigned int getChannels() const;
+        unsigned int getSampleRate() const;
+        unsigned int getBitsPerSample() const;
 
     private:
-        // Libaudiofile members
-        AFfilehandle fileHandle;
+        // FFmpeg members
+        AVFormatContext* formatContext;
+        AVCodecContext* codecContext;
+        AVPacket* packet;
+        AVFrame* frame;
+        SwrContext* swrContext;
+        int audioStreamIndex;
+        
+        // File state
         bool fileOpen;
-        AFframecount lastReadFrames;
-        streamsize lastBytesRead;
-        int sampleFormat;
-        int sampleWidth;  // bytes per sample
-        unsigned int fileSampleRate;
-        unsigned int fileChannels;
         bool eofReached;
         bool errorState;
-        AFframecount currentFramePos;
-        AFframecount totalFrames;
+        streamsize lastBytesRead;
+        
+        // Audio properties
+        unsigned int fileChannels;
+        unsigned int fileSampleRate;
+        unsigned int fileBitsPerSample;
+        int64_t totalSamples;
+        unsigned long long fileSize;  // For boundary checks (in bytes, for 32-bit float output)
+        int64_t currentSamplePos;
+        
+        // Format conversion buffer (FFmpeg decoded → float for libsoxr)
+        float* conversionBuffer;
+        size_t conversionBufferSize;  // in floats
+        size_t conversionBufferUsed;  // floats currently in buffer
+        size_t conversionBufferPos;   // read position in buffer
 
-        // Resampling members
+        // Resampling members (libsoxr - unchanged)
         unsigned int targetSampleRate;
         soxr_t resampler;
         bool resamplingEnabled;
@@ -121,7 +118,10 @@ class AudioFstream
         // Helper methods
         void initializeResampler();
         void cleanupResampler();
+        void cleanupFFmpeg();
         soxr_quality_spec_t parseQualityString(const string& quality);
+        bool decodeNextFrame();  // Decode one frame from FFmpeg
+        string getFFmpegError(int errnum);  // Translate FFmpeg error codes
 };
 
 #endif // AUDIOFSTREAM_H

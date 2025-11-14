@@ -91,7 +91,7 @@ class AudioPlayer : public OscReceiver
         unsigned int audioSecondSize;                   // Audio second size in bytes
         unsigned int audioMillisecondSize;              // Audio millisecond size in bytes
 
-        short int* intermediate;                        // Audio samples intermediate buffer
+        float* intermediate;                            // Audio samples intermediate buffer (32-bit float for JACK)
         float* volumeMaster;                            // Volumen master multiplier
 
         // Our midi, osc and audio objects
@@ -113,7 +113,7 @@ class AudioPlayer : public OscReceiver
         // float headAccel;                       // Head acceleration (TO DO)
         std::atomic<int> playheadControl = 1;       // Head reading direction
 
-        unsigned int headStep = 2;              // Head step per channel, by now SINT16 format, 2 bytes
+        unsigned int headStep = 4;              // Head step per channel, FLOAT32 format, 4 bytes
         long int headOffset = 0;                // Head offset
         std::atomic <bool> offsetChanged = false;             // Flag to recognise when the offset is OSC changed
         long int headNewOffset = 0;             // Head offset to update through OSC
