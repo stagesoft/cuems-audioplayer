@@ -1,6 +1,6 @@
 #!/bin/bash
 
-executable=/home/ion/src/cuems/cuems-audioplayer/build/src/audioplayer-cuems
+executable=/home/ion/src/cuems/cuems-audioplayer/build/audioplayer-cuems
 start_port=8000
 instancias=20
 contador=1

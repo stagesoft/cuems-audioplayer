@@ -74,7 +74,8 @@ class AudioPlayer : public OscReceiver
                         const bool mtcFollowFlag = false,
                         unsigned int numberOfChannels = 2, 
                         unsigned int sRate = 44100,
-                        RtAudio::Api audioApi = RtAudio::Api::UNIX_JACK );
+                        RtAudio::Api audioApi = RtAudio::Api::UNIX_JACK,
+                        const string &resampleQuality = "hq" );
         ~AudioPlayer( void );
         //////////////////////////////////////////
 

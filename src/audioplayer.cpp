@@ -50,7 +50,8 @@ AudioPlayer::AudioPlayer(   int port,
                             const bool mtcFollowFlag,
                             unsigned int numberOfChannels, 
                             unsigned int sRate,
-                            RtAudio::Api audioApi )
+                            RtAudio::Api audioApi,
+                            const string &resampleQuality )
                             :   // Members initialization
                             OscReceiver(port, oscRoute.c_str()),
                             mtcReceiver(RtMidiIn::LINUX_ALSA, client_name),
@@ -71,8 +72,11 @@ AudioPlayer::AudioPlayer(   int port,
 
     //////////////////////////////////////////////////////////
     // Set up working class members
+    
+    // Set resample quality before opening audio stream
+    audioFile.setResampleQuality(resampleQuality);
 
-    // Audio frame size calc
+    // Audio frame size calc (will be updated with actual JACK sample rate later)
     audioFrameSize = nChannels * headStep;
     audioSecondSize = sampleRate * audioFrameSize;
     audioMillisecondSize = ( (float) sampleRate / 1000 ) * audioFrameSize;
@@ -165,6 +169,27 @@ AudioPlayer::AudioPlayer(   int port,
                             &streamOps );
 
         audio.startStream();
+        
+        // Get actual JACK sample rate (JACK is the master)
+        unsigned int jackSampleRate = audio.getStreamSampleRate();
+        if (jackSampleRate != 0 && jackSampleRate != sampleRate) {
+            CuemsLogger::getLogger()->logInfo("JACK sample rate: " + std::to_string(jackSampleRate) + 
+                                               " Hz (requested was " + std::to_string(sampleRate) + " Hz)");
+            sampleRate = jackSampleRate;
+            
+            // Recalculate timing with actual JACK sample rate
+            audioSecondSize = sampleRate * audioFrameSize;
+            audioMillisecondSize = ( (float) sampleRate / 1000 ) * audioFrameSize;
+            
+            // Recalculate offset with correct sample rate
+            headOffset = (initOffset + XJADEO_ADJUSTMENT) * audioMillisecondSize;
+            headOffset += audioFile.headerSize;
+        } else if (jackSampleRate != 0) {
+            CuemsLogger::getLogger()->logInfo("JACK sample rate: " + std::to_string(jackSampleRate) + " Hz");
+        }
+        
+        // Configure resampling in audio file if needed
+        audioFile.setTargetSampleRate(sampleRate);
     }
     catch (RtAudioError &error) {
         std::cerr << error.getMessage();

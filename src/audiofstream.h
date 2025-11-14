@@ -31,15 +31,17 @@
 #define AUDIOFSTREAM_H
 
 #include <iostream>
-#include <fstream>
 #include <vector>
 #include <iomanip>
+#include <string>
+#include <audiofile.h>
+#include <soxr.h>
 #include "cuemslogger.h"
 #include "cuems_errors.h"
 
 using namespace std;
 
-class AudioFstream : public ifstream
+class AudioFstream
 {
     typedef struct {
         char id[5] = "    ";
@@ -49,7 +51,7 @@ class AudioFstream : public ifstream
     public:
         AudioFstream(   const string filename = "", 
                         ios_base::openmode openmode = ios_base::in | ios_base::binary );
-        inline ~AudioFstream() { };
+        ~AudioFstream();
 
         struct headerData {
             // "RIFF" & "WAVE" headers
@@ -74,9 +76,52 @@ class AudioFstream : public ifstream
 
         bool checkHeader( void );
         bool loadFile( const string path );
+        
+        // Stream-like interface for compatibility
+        void read(char* buffer, size_t bytes);
+        void seekg(long long pos, ios_base::seekdir dir);
+        streamsize gcount() const;
+        bool eof() const;
+        bool good() const;
+        bool bad() const;
+        void clear();
+        void close();
+        void open(const string path, ios_base::openmode mode);
 
         unsigned int headerSize = 0;
 
+        // New methods for resampling
+        void setTargetSampleRate(unsigned int rate);
+        void setResampleQuality(const string& quality);
+
+    private:
+        // Libaudiofile members
+        AFfilehandle fileHandle;
+        bool fileOpen;
+        AFframecount lastReadFrames;
+        streamsize lastBytesRead;
+        int sampleFormat;
+        int sampleWidth;  // bytes per sample
+        unsigned int fileSampleRate;
+        unsigned int fileChannels;
+        bool eofReached;
+        bool errorState;
+        AFframecount currentFramePos;
+        AFframecount totalFrames;
+
+        // Resampling members
+        unsigned int targetSampleRate;
+        soxr_t resampler;
+        bool resamplingEnabled;
+        soxr_quality_spec_t qualitySpec;
+        float* resampleInputBuffer;
+        float* resampleOutputBuffer;
+        size_t resampleBufferSize;
+
+        // Helper methods
+        void initializeResampler();
+        void cleanupResampler();
+        soxr_quality_spec_t parseQualityString(const string& quality);
 };
 
 #endif // AUDIOFSTREAM_H
