@@ -3,7 +3,14 @@
     audioplayer for linux based using RtAudio and RtMidi libraries to
     process audio and receive MTC sync. It also uses oscpack to receive
     some configurations through osc commands.
-    Copyright (C) 2020  Stage Lab & bTactic.
+    Copyright (C) 2020  Stage Lab Coop.
+
+    Authors:
+        Alex Ramos <alex@stagelab.coop>
+        Ion Reguera <ion@stagelab.coop>
+
+    Portions of the file reading and audio decoding code are based on mpv
+    (https://mpv.io/), which is licensed under GPLv2+ and LGPLv2.1+.
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
