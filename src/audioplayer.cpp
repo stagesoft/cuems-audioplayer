@@ -60,7 +60,7 @@ AudioPlayer::AudioPlayer(   int port,
                             sampleRate(sRate),
                             deviceName(deviceName),
                             audio(audioApi),
-                            audioFile(filePath.c_str()),
+                            audioFile(filePath.c_str()),  // Open file to check format
                             endWaitTime(finalWait),
                             stopOnMTCLost(stopOnLostFlag),
                             followingMtc(mtcFollowFlag)
@@ -285,6 +285,61 @@ AudioPlayer::AudioPlayer(   int port,
             // Recalculate offset with correct sample rate
             headOffset = (initOffset + XJADEO_ADJUSTMENT) * audioMillisecondSize;
             // Note: With FFmpeg, headers are handled internally - no manual offset needed
+        }
+        
+        // Check if we already have a valid audio file
+        if (!audioFile.good()) {
+            std::string str = "Error opening audio file: " + audioPath;
+            std::cerr << str << endl;
+            CuemsLogger::getLogger()->logError(str);
+            exit(CUEMS_EXIT_AUDIO_DEVICE_ERR);
+        }
+        
+        // Get the file's actual channel count
+        unsigned int fileChannels = audioFile.getChannels();
+        
+        // Get device capabilities
+        RtAudio::DeviceInfo deviceInfo = audio.getDeviceInfo(audioDeviceId);
+        unsigned int deviceChannels = deviceInfo.outputChannels;
+        
+        // Determine target channels: use file's channels if device supports it, otherwise downmix
+        // This is how mpv does it - only downmix when necessary
+        if (fileChannels > deviceChannels) {
+            // File has more channels than device supports, need to downmix
+            std::cerr << "Device supports " << deviceChannels << " channels, file has " 
+                      << fileChannels << " channels - will downmix" << endl;
+            CuemsLogger::getLogger()->logInfo("Downmixing " + std::to_string(fileChannels) + 
+                                              " channels to " + std::to_string(deviceChannels) + 
+                                              " channels to match device capabilities");
+            
+            // Reopen the file with downmixing
+            audioFile.close();
+            audioFile.setTargetChannels(deviceChannels);
+            audioFile.open(audioPath, ios::binary | ios::in);
+            
+            if (!audioFile.good()) {
+                std::string str = "Error reopening audio file with downmixing: " + audioPath;
+                std::cerr << str << endl;
+                CuemsLogger::getLogger()->logError(str);
+                exit(CUEMS_EXIT_AUDIO_DEVICE_ERR);
+            }
+            
+            // Update nChannels to match downmixed output
+            nChannels = deviceChannels;
+        } else if (fileChannels < nChannels) {
+            // File has fewer channels than requested, use file's channel count
+            std::cerr << "File has " << fileChannels << " channels, using that instead of requested " 
+                      << nChannels << " channels" << endl;
+            CuemsLogger::getLogger()->logInfo("Using file's " + std::to_string(fileChannels) + 
+                                              " channels (device supports " + std::to_string(deviceChannels) + ")");
+            nChannels = fileChannels;
+        } else {
+            // Device has enough channels, use file's native channel count
+            std::cerr << "Playing " << fileChannels << " channels (device supports " 
+                      << deviceChannels << " channels)" << endl;
+            CuemsLogger::getLogger()->logInfo("Playing " + std::to_string(fileChannels) + 
+                                              " channels (device supports " + std::to_string(deviceChannels) + ")");
+            nChannels = fileChannels;
         }
         
         // Configure resampling in audio file if needed (libsoxr will handle rate conversion)

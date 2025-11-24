@@ -72,6 +72,7 @@ class AudioFstream
         // Methods for resampling
         void setTargetSampleRate(unsigned int rate);
         void setResampleQuality(const string& quality);
+        void setTargetChannels(unsigned int channels);  // Set target channel count for downmixing
         
         // File information accessors (for compatibility with audioplayer.cpp)
         unsigned long long getFileSize() const;
@@ -110,6 +111,7 @@ class AudioFstream
 
         // Resampling members (libsoxr - unchanged)
         unsigned int targetSampleRate;
+        unsigned int targetChannels;  // Target channel count for downmixing (0 = use file's channels)
         soxr_t resampler;
         bool resamplingEnabled;
         soxr_quality_spec_t qualitySpec;

@@ -43,3 +43,20 @@ target_include_directories(audioplayer-cuems PUBLIC
                         )
 # Install rules
 install(TARGETS audioplayer-cuems DESTINATION bin)
+
+if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+    get_filename_component(CUEMS_PROJECT_ROOT "${CMAKE_SOURCE_DIR}" DIRECTORY)
+else()
+    set(CUEMS_PROJECT_ROOT "${CMAKE_SOURCE_DIR}")
+endif()
+
+if(NOT TARGET distclean)
+    add_custom_target(distclean
+        COMMAND ${CMAKE_COMMAND}
+                -DPROJECT_BINARY_DIR=${CMAKE_BINARY_DIR}
+                -DPROJECT_SOURCE_DIR=${CUEMS_PROJECT_ROOT}
+                -P ${CUEMS_PROJECT_ROOT}/cmake/distclean.cmake
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        COMMENT "Removing all generated build and test artifacts"
+    )
+endif()

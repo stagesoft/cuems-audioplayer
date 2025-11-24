@@ -67,6 +67,7 @@ AudioFstream::AudioFstream( const string filename,
     
     // Initialize resampling members
     targetSampleRate = 0;
+    targetChannels = 0;  // 0 means use file's channel count (no downmixing)
     resampler = nullptr;
     resamplingEnabled = false;
     qualitySpec = soxr_quality_spec(SOXR_HQ, 0);  // Default to high quality
@@ -168,6 +169,13 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
         fileOpen = false;
         return;
     }
+    
+    // Log audio stream info for debugging
+    std::cerr << "Audio stream index: " << audioStreamIndex << endl;
+    const char* codec_name = avcodec_get_name(codecParams->codec_id);
+    std::cerr << "Codec: " << (codec_name ? codec_name : "unknown") << endl;
+    std::cerr << "Channels: " << channels << ", Sample rate: " << sampleRate << " Hz" << endl;
+    std::cerr << "Sample format: " << av_get_sample_fmt_name(sampleFmt) << endl;
     fileChannels = (unsigned int)channels;
     fileSampleRate = (unsigned int)sampleRate;
     
@@ -190,28 +198,21 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
     // File size in bytes (32-bit float output for JACK)
     fileSize = totalSamples * fileChannels * 4;  // 4 bytes per sample (32-bit float)
     
-    // Setup libswresample for format conversion to float
-    // (FFmpeg decodes to various formats, we need float for libsoxr)
-    AVChannelLayout out_ch_layout = codecContext->ch_layout;
+    // Setup libswresample for format conversion to float (and optional channel downmixing)
+    // Use AudioDecoder's createSwrContext which handles unknown channel layouts properly
+    unsigned int outputChannels = (targetChannels > 0) ? targetChannels : fileChannels;
     
-    int ret = swr_alloc_set_opts2(&swrContext,
-                              &out_ch_layout, AV_SAMPLE_FMT_FLT, fileSampleRate,
-                              &codecContext->ch_layout, codecContext->sample_fmt, codecContext->sample_rate,
-                              0, nullptr);
-    
-    if (ret < 0 || !swrContext) {
-        std::cerr << "Failed to create resampler context: " << getFFmpegError(ret) << endl;
-        CuemsLogger::getLogger()->logError("Failed to create resampler context: " + getFFmpegError(ret));
-        cleanupFFmpeg();
-        errorState = true;
-        fileOpen = false;
-        return;
+    if (targetChannels > 0 && targetChannels != fileChannels) {
+        std::cerr << "Downmixing from " << fileChannels << " to " << targetChannels << " channels" << endl;
+        CuemsLogger::getLogger()->logInfo("Downmixing audio: " + std::to_string(fileChannels) + 
+                                          " -> " + std::to_string(targetChannels) + " channels");
     }
     
-    ret = swr_init(swrContext);
-    if (ret < 0) {
-        std::cerr << "Failed to initialize resampler: " << getFFmpegError(ret) << endl;
-        CuemsLogger::getLogger()->logError("Failed to initialize resampler: " + getFFmpegError(ret));
+    swrContext = audioDecoder.createSwrContextExplicit(outputChannels, fileSampleRate, AV_SAMPLE_FMT_FLT);
+    
+    if (!swrContext) {
+        std::cerr << "Failed to create swresample context" << endl;
+        CuemsLogger::getLogger()->logError("Failed to create swresample context");
         cleanupFFmpeg();
         errorState = true;
         fileOpen = false;
@@ -219,10 +220,14 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
     }
     
     // Allocate conversion buffer (decode → float)
-    conversionBufferSize = 8192 * fileChannels;  // 8192 frames worth
+    // Use outputChannels (may be downmixed) instead of fileChannels
+    conversionBufferSize = 8192 * outputChannels;  // 8192 frames worth
     conversionBuffer = new float[conversionBufferSize];
     conversionBufferUsed = 0;
     conversionBufferPos = 0;
+    
+    // Update fileChannels to reflect output channel count (for reading logic)
+    fileChannels = outputChannels;
     
     fileOpen = true;
     errorState = false;
@@ -241,6 +246,16 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
     if (targetSampleRate > 0 && targetSampleRate != fileSampleRate) {
         initializeResampler();
     }
+}
+
+////////////////////////////////////////////
+// Set target channel count for downmixing (like mpv)
+////////////////////////////////////////////
+void AudioFstream::setTargetChannels(unsigned int channels)
+{
+    targetChannels = channels;
+    // Note: Downmixing is applied when file is opened, not dynamically
+    // This matches mpv's behavior where channel layout is set at demuxer initialization
 }
 
 ////////////////////////////////////////////
@@ -313,6 +328,13 @@ bool AudioFstream::decodeNextFrame()
         }
         
         // Successfully decoded a frame
+        // Debug: log frame info for first few frames
+        static int frame_count = 0;
+        if (frame_count < 3) {
+            std::cerr << "Decoded frame " << frame_count << ": " << frame->nb_samples 
+                      << " samples, format: " << av_get_sample_fmt_name((AVSampleFormat)frame->format) << endl;
+            frame_count++;
+        }
         return true;
     }
 }
@@ -425,10 +447,17 @@ void AudioFstream::read(char* buffer, size_t bytes)
                                                  (const uint8_t**)frame->data, frame->nb_samples);
                     
                     if (out_samples < 0) {
-                        std::cerr << "Error converting audio samples" << endl;
+                        std::cerr << "Error converting audio samples: " << getFFmpegError(out_samples) << endl;
                         errorState = true;
                         av_frame_unref(frame);
                         break;
+                    }
+                    
+                    // Debug: log conversion info for first few frames
+                    static int convert_count_no_resample = 0;
+                    if (convert_count_no_resample < 3) {
+                        std::cerr << "Converted " << out_samples << " samples to float (no resample, frame " << convert_count_no_resample << ")" << endl;
+                        convert_count_no_resample++;
                     }
                     
                     conversionBufferUsed = out_samples * fileChannels;
