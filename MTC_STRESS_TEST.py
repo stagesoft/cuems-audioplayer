@@ -142,17 +142,35 @@ def send_osc_message(host, port, address, *args):
         return False
 
 def find_player_binary():
-    """Find the audioplayer-cuems binary"""
+    """Find the audioplayer-cuems binary
+    
+    Searches relative to the script's location, so it works regardless of
+    the current working directory.
+    """
+    # Get the directory where this script is located
+    script_dir = Path(__file__).parent.absolute()
+    
+    # Possible paths relative to project root (where script is located)
     possible_paths = [
-        'build/audioplayer-cuems_dbg',
-        'build/audioplayer-cuems',
-        'build/src/audioplayer-cuems_dbg',
-        'build/src/audioplayer-cuems',
+        script_dir / 'build' / 'audioplayer-cuems_dbg',
+        script_dir / 'build' / 'audioplayer-cuems',
+        script_dir / 'build' / 'src' / 'audioplayer-cuems_dbg',
+        script_dir / 'build' / 'src' / 'audioplayer-cuems',
+        # Also check if we're already in build directory
+        script_dir / 'audioplayer-cuems_dbg',
+        script_dir / 'audioplayer-cuems',
+        script_dir / 'src' / 'audioplayer-cuems_dbg',
+        script_dir / 'src' / 'audioplayer-cuems',
+        # Check parent directory (if script is in build/)
+        script_dir.parent / 'build' / 'audioplayer-cuems_dbg',
+        script_dir.parent / 'build' / 'audioplayer-cuems',
+        script_dir.parent / 'build' / 'src' / 'audioplayer-cuems_dbg',
+        script_dir.parent / 'build' / 'src' / 'audioplayer-cuems',
     ]
     
     for path in possible_paths:
-        if Path(path).exists():
-            return Path(path).absolute()
+        if path.exists():
+            return path.absolute()
     
     return None
 
@@ -452,19 +470,22 @@ def main():
             mtc_receiver = None
     
     # Test files - organized by format (WAV → AIFF → MP3)
+    # Use script_dir for all paths so it works from any directory
+    script_dir = Path(__file__).parent.absolute()
+    stress_files_prefix = str(script_dir / "stress_test_files")
     test_files = [
         # WAV files
-        ("WAV 22kHz (downsampling)", "stress_test_files/stress_test_22050_16bit.wav"),
-        ("WAV 44.1kHz (native)", "stress_test_files/stress_test_44100_16bit.wav"),
-        ("WAV 48kHz (upsampling)", "stress_test_files/stress_test_48000_16bit.wav"),
+        ("WAV 22kHz (downsampling)", f"{stress_files_prefix}/stress_test_22050_16bit.wav"),
+        ("WAV 44.1kHz (native)", f"{stress_files_prefix}/stress_test_44100_16bit.wav"),
+        ("WAV 48kHz (upsampling)", f"{stress_files_prefix}/stress_test_48000_16bit.wav"),
         # AIFF files
-        ("AIFF 22kHz (downsampling)", "stress_test_files/stress_test_22050_16bit.aiff"),
-        ("AIFF 44.1kHz (native)", "stress_test_files/stress_test_44100_16bit.aiff"),
-        ("AIFF 48kHz (upsampling)", "stress_test_files/stress_test_48000_16bit.aiff"),
+        ("AIFF 22kHz (downsampling)", f"{stress_files_prefix}/stress_test_22050_16bit.aiff"),
+        ("AIFF 44.1kHz (native)", f"{stress_files_prefix}/stress_test_44100_16bit.aiff"),
+        ("AIFF 48kHz (upsampling)", f"{stress_files_prefix}/stress_test_48000_16bit.aiff"),
         # MP3 files
-        ("MP3 22kHz (downsampling)", "stress_test_files/stress_test_22050_192k.mp3"),
-        ("MP3 44.1kHz (native)", "stress_test_files/stress_test_44100_192k.mp3"),
-        ("MP3 48kHz (upsampling)", "stress_test_files/stress_test_48000_192k.mp3"),
+        ("MP3 22kHz (downsampling)", f"{stress_files_prefix}/stress_test_22050_192k.mp3"),
+        ("MP3 44.1kHz (native)", f"{stress_files_prefix}/stress_test_44100_192k.mp3"),
+        ("MP3 48kHz (upsampling)", f"{stress_files_prefix}/stress_test_48000_192k.mp3"),
     ]
     
     results = []

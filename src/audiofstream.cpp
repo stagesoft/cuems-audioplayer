@@ -221,7 +221,8 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
     
     // Allocate conversion buffer (decode → float)
     // Use outputChannels (may be downmixed) instead of fileChannels
-    conversionBufferSize = 8192 * outputChannels;  // 8192 frames worth
+    // Increase buffer size for formats like DTS that may have larger frames
+    conversionBufferSize = 16384 * outputChannels;  // 16384 frames worth (larger for DTS/complex codecs)
     conversionBuffer = new float[conversionBufferSize];
     conversionBufferUsed = 0;
     conversionBufferPos = 0;
@@ -372,8 +373,18 @@ void AudioFstream::read(char* buffer, size_t bytes)
                 // Need to decode more data
                 if (decodeNextFrame()) {
                     // Convert decoded frame to float
+                    // Account for libswresample's internal buffering delay
+                    int64_t delay = swr_get_delay(swrContext, fileSampleRate);
+                    
+                    // Calculate max output samples: input samples + buffered samples
+                    int64_t estimated_out_samples = av_rescale_rnd(delay + frame->nb_samples,
+                                                                    fileSampleRate, fileSampleRate,
+                                                                    AV_ROUND_UP);
+                    int max_out_samples = std::min((int64_t)(conversionBufferSize / fileChannels),
+                                                    estimated_out_samples);
+                    
                     uint8_t* out = (uint8_t*)conversionBuffer;
-                    int out_samples = swr_convert(swrContext, &out, frame->nb_samples,
+                    int out_samples = swr_convert(swrContext, &out, max_out_samples,
                                                  (const uint8_t**)frame->data, frame->nb_samples);
                     
                     if (out_samples < 0) {
@@ -387,39 +398,74 @@ void AudioFstream::read(char* buffer, size_t bytes)
                     conversionBufferPos = 0;
                     av_frame_unref(frame);
                 } else {
+                    // EOF - drain remaining samples from swresample
+                    int64_t delay = swr_get_delay(swrContext, fileSampleRate);
+                    if (delay > 0) {
+                        int max_out_samples = conversionBufferSize / fileChannels;
+                        uint8_t* out = (uint8_t*)conversionBuffer;
+                        int out_samples = swr_convert(swrContext, &out, max_out_samples,
+                                                     nullptr, 0);  // NULL input to drain
+                        if (out_samples > 0) {
+                            conversionBufferUsed = out_samples * fileChannels;
+                            conversionBufferPos = 0;
+                            continue;  // Process drained samples
+                        }
+                    }
                     break;  // EOF or error
                 }
             }
             
             if (conversionBufferPos >= conversionBufferUsed) {
-                break;  // No more data available
-            }
-            
-            // Feed available float data to libsoxr
-            size_t floatsAvailable = conversionBufferUsed - conversionBufferPos;
-            size_t floatsToResample = std::min(floatsAvailable, resampledFloatsNeeded - floatsResampled);
-            size_t framesAvailable = floatsAvailable / fileChannels;
-            size_t framesInThisPass = floatsToResample / fileChannels;
-            
-            size_t inputFramesUsed = 0;
-            size_t outputFramesGenerated = 0;
-            
-            soxr_error_t soxr_err = soxr_process(resampler,
-                                                 conversionBuffer + conversionBufferPos, framesInThisPass, &inputFramesUsed,
-                                                 tempFloatBuffer + floatsResampled, framesNeeded - (floatsResampled / fileChannels), &outputFramesGenerated);
-            
-            if (soxr_err) {
-                std::cerr << "SOXR error: " << soxr_strerror(soxr_err) << endl;
-                CuemsLogger::getLogger()->logError("Resampling error: " + string(soxr_strerror(soxr_err)));
-                errorState = true;
-                break;
-            }
-            
-            conversionBufferPos += inputFramesUsed * fileChannels;
-            floatsResampled += outputFramesGenerated * fileChannels;
-            
-            if (outputFramesGenerated == 0 && inputFramesUsed == 0) {
-                break;  // No progress
+                // No more input data - if we're at EOF, drain the resampler
+                if (eofReached && floatsResampled < resampledFloatsNeeded) {
+                    // Drain libsoxr's internal buffer
+                    size_t outputFramesGenerated = 0;
+                    soxr_error_t soxr_err = soxr_process(resampler,
+                                                         nullptr, 0, nullptr,  // NULL input to drain
+                                                         tempFloatBuffer + floatsResampled, 
+                                                         framesNeeded - (floatsResampled / fileChannels), 
+                                                         &outputFramesGenerated);
+                    
+                    if (soxr_err) {
+                        std::cerr << "SOXR drain error: " << soxr_strerror(soxr_err) << endl;
+                        break;
+                    }
+                    
+                    floatsResampled += outputFramesGenerated * fileChannels;
+                    
+                    if (outputFramesGenerated == 0) {
+                        break;  // Fully drained
+                    }
+                } else {
+                    break;  // No more data available
+                }
+            } else {
+                // Feed available float data to libsoxr
+                size_t floatsAvailable = conversionBufferUsed - conversionBufferPos;
+                size_t floatsToResample = std::min(floatsAvailable, resampledFloatsNeeded - floatsResampled);
+                size_t framesAvailable = floatsAvailable / fileChannels;
+                size_t framesInThisPass = floatsToResample / fileChannels;
+                
+                size_t inputFramesUsed = 0;
+                size_t outputFramesGenerated = 0;
+                
+                soxr_error_t soxr_err = soxr_process(resampler,
+                                                     conversionBuffer + conversionBufferPos, framesInThisPass, &inputFramesUsed,
+                                                     tempFloatBuffer + floatsResampled, framesNeeded - (floatsResampled / fileChannels), &outputFramesGenerated);
+                
+                if (soxr_err) {
+                    std::cerr << "SOXR error: " << soxr_strerror(soxr_err) << endl;
+                    CuemsLogger::getLogger()->logError("Resampling error: " + string(soxr_strerror(soxr_err)));
+                    errorState = true;
+                    break;
+                }
+                
+                conversionBufferPos += inputFramesUsed * fileChannels;
+                floatsResampled += outputFramesGenerated * fileChannels;
+                
+                if (outputFramesGenerated == 0 && inputFramesUsed == 0) {
+                    break;  // No progress
+                }
             }
         }
         
@@ -442,8 +488,18 @@ void AudioFstream::read(char* buffer, size_t bytes)
             while (conversionBufferPos >= conversionBufferUsed && !eofReached) {
                 if (decodeNextFrame()) {
                     // Convert decoded frame to float
+                    // Account for libswresample's internal buffering delay
+                    int64_t delay = swr_get_delay(swrContext, fileSampleRate);
+                    
+                    // Calculate max output samples: input samples + buffered samples
+                    int64_t estimated_out_samples = av_rescale_rnd(delay + frame->nb_samples,
+                                                                    fileSampleRate, fileSampleRate,
+                                                                    AV_ROUND_UP);
+                    int max_out_samples = std::min((int64_t)(conversionBufferSize / fileChannels),
+                                                    estimated_out_samples);
+                    
                     uint8_t* out = (uint8_t*)conversionBuffer;
-                    int out_samples = swr_convert(swrContext, &out, frame->nb_samples,
+                    int out_samples = swr_convert(swrContext, &out, max_out_samples,
                                                  (const uint8_t**)frame->data, frame->nb_samples);
                     
                     if (out_samples < 0) {
@@ -464,6 +520,19 @@ void AudioFstream::read(char* buffer, size_t bytes)
                     conversionBufferPos = 0;
                     av_frame_unref(frame);
                 } else {
+                    // EOF - drain remaining samples from swresample
+                    int64_t delay = swr_get_delay(swrContext, fileSampleRate);
+                    if (delay > 0) {
+                        int max_out_samples = conversionBufferSize / fileChannels;
+                        uint8_t* out = (uint8_t*)conversionBuffer;
+                        int out_samples = swr_convert(swrContext, &out, max_out_samples,
+                                                     nullptr, 0);  // NULL input to drain
+                        if (out_samples > 0) {
+                            conversionBufferUsed = out_samples * fileChannels;
+                            conversionBufferPos = 0;
+                            continue;  // Process drained samples
+                        }
+                    }
                     break;
                 }
             }
@@ -749,7 +818,8 @@ void AudioFstream::initializeResampler()
     resamplingEnabled = true;
     
     // Allocate resampling buffers
-    resampleBufferSize = 8192 * fileChannels;  // 8192 frames worth
+    // Increase buffer size for formats like DTS that may need more headroom
+    resampleBufferSize = 16384 * fileChannels;  // 16384 frames worth (larger for complex codecs)
     resampleInputBuffer = new float[resampleBufferSize];
     resampleOutputBuffer = new float[resampleBufferSize];
     

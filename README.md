@@ -40,6 +40,56 @@ to get the _Debug_ configuration. And then:
     cd build
     make
 
+## Generating Test Files
+
+### Audio Test Files
+
+Generate comprehensive audio test files from source MP3s in the `audio/` directory:
+
+    ./generate_test_files.sh
+
+This creates test files in `test_audio_files/` with various formats (WAV, AIFF, MP3, FLAC, OGG, OPUS, AAC, etc.) and sample rates.
+
+### Video Test Files
+
+There are two ways to get video test files:
+
+**Option 1: Download from legal sources**
+
+Download test videos with audio from Creative Commons and public domain sources:
+
+    ./download_test_videos.sh [output_directory] [max_parallel]
+
+This downloads videos like Big Buck Bunny (Creative Commons) and sample test files in various formats (MP4, MOV, AVI, MKV) from legal sources. By default, videos are saved to `test_video_files/` directory.
+
+Downloads run in parallel (default: 10 concurrent downloads) to maximize bandwidth usage. You can adjust the parallelism with the second parameter:
+
+    ./download_test_videos.sh test_video_files 20  # Use 20 parallel downloads
+
+**Option 2: Generate with embedded audio**
+
+Generate video test files with embedded audio tracks from your audio files:
+
+    ./generate_test_videos.sh [output_directory] [duration]
+
+This creates video files in various formats (MP4, MOV, AVI, MKV) with different codecs (H.264, HEVC, AV1, HAP, MPEG-4) and audio sample rates (44.1kHz, 48kHz). The script uses the same formats as cuems-videocomposer but adds audio tracks from the `audio/` directory.
+
+By default, videos are saved to `test_video_files/` directory.
+
+Examples:
+
+    ./download_test_videos.sh test_video_files
+    ./generate_test_videos.sh test_video_files 30
+
+To remove every generated artifact (equivalent to `git clean -xdf` for the build
+outputs), you can run:
+
+    cmake --build build --target distclean
+
+This keeps the `build/` directory itself but removes all compiled binaries,
+intermediate files, and cached CTest/MTC logs so you can start from a pristine
+state.
+
 ## Usage
 
     audioplayer-cuems v. 0.0 - Copyright (C) 2020 Stage Lab & bTactic

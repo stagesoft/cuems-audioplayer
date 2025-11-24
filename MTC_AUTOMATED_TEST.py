@@ -7,11 +7,15 @@ This script:
 2. Launches cuems-audioplayer WITHOUT -m flag (MTC following disabled)
 3. Waits for player to load file and stabilize (short wait)
 4. Enables MTC following via OSC command
-5. Plays for ~15 seconds per file
+5. Plays for specified duration per file (default: 15 seconds)
 6. Uses offset so next file starts from beginning with timecode already running
 
+Supports testing:
+- Audio files: WAV, AIFF, MP3, FLAC, OGG, OPUS, AAC
+- Video files: MP4, MKV, AVI, MOV (audio track extraction)
+
 Usage:
-    ./MTC_AUTOMATED_TEST.py [--format wav|aiff|mp3|all]
+    ./MTC_AUTOMATED_TEST.py [--format wav|aiff|mp3|video|all] [--duration SECONDS] [--file PATH]
 """
 
 import sys
@@ -211,21 +215,39 @@ def check_jack_running():
     return (False, False, None)
 
 def find_player_binary():
-    """Find the audioplayer-cuems binary"""
+    """Find the audioplayer-cuems binary
+    
+    Searches relative to the script's location, so it works regardless of
+    the current working directory.
+    """
+    # Get the directory where this script is located
+    script_dir = Path(__file__).parent.absolute()
+    
+    # Possible paths relative to project root (where script is located)
     possible_paths = [
-        'build/audioplayer-cuems_dbg',
-        'build/audioplayer-cuems',
-        'build/src/audioplayer-cuems_dbg',
-        'build/src/audioplayer-cuems',
+        script_dir / 'build' / 'audioplayer-cuems_dbg',
+        script_dir / 'build' / 'audioplayer-cuems',
+        script_dir / 'build' / 'src' / 'audioplayer-cuems_dbg',
+        script_dir / 'build' / 'src' / 'audioplayer-cuems',
+        # Also check if we're already in build directory
+        script_dir / 'audioplayer-cuems_dbg',
+        script_dir / 'audioplayer-cuems',
+        script_dir / 'src' / 'audioplayer-cuems_dbg',
+        script_dir / 'src' / 'audioplayer-cuems',
+        # Check parent directory (if script is in build/)
+        script_dir.parent / 'build' / 'audioplayer-cuems_dbg',
+        script_dir.parent / 'build' / 'audioplayer-cuems',
+        script_dir.parent / 'build' / 'src' / 'audioplayer-cuems_dbg',
+        script_dir.parent / 'build' / 'src' / 'audioplayer-cuems',
     ]
     
     for path in possible_paths:
-        if Path(path).exists():
-            return Path(path).absolute()
+        if path.exists():
+            return path.absolute()
     
     return None
 
-def run_test(test_name, audio_file, player_binary, osc_port, mtc_sender, mtc_receiver, port_base=7000, use_pw_jack=False):
+def run_test(test_name, audio_file, player_binary, osc_port, mtc_sender, mtc_receiver, port_base=7000, use_pw_jack=False, play_duration=15):
     """Run a single test scenario
     
     Args:
@@ -237,6 +259,7 @@ def run_test(test_name, audio_file, player_binary, osc_port, mtc_sender, mtc_rec
         mtc_receiver: MtcReceiver instance (to get current MTC time)
         port_base: Base port number
         use_pw_jack: If True, wrap player command with pw-jack
+        play_duration: How many seconds to play (default: 15)
     """
     print(f"\n{'='*80}")
     print(f"TEST: {test_name}")
@@ -364,8 +387,8 @@ def run_test(test_name, audio_file, player_binary, osc_port, mtc_sender, mtc_rec
             else:
                 print(f"  ⚠ MTC timecode may not be advancing")
         
-        # Step 3: Play for ~15 seconds
-        print(f"\n[3/4] Playing for 15 seconds...")
+        # Step 3: Play for specified duration
+        print(f"\n[3/4] Playing for {play_duration} seconds...")
         print("   MTC timecode is running, player should now follow...")
         
         # Check player is still running
@@ -386,8 +409,8 @@ def run_test(test_name, audio_file, player_binary, osc_port, mtc_sender, mtc_rec
                 print(f"  Expected seek position: {(final_mtc_ms + (offset_ms_now if 'offset_ms_now' in locals() else 0))} ms")
             return False
         
-        # Let it play for 15 seconds, checking periodically
-        for i in range(15):
+        # Let it play for specified duration, checking periodically
+        for i in range(play_duration):
             time.sleep(1)
             if player_process.poll() is not None:
                 stdout, stderr = player_process.communicate()
@@ -407,7 +430,7 @@ def run_test(test_name, audio_file, player_binary, osc_port, mtc_sender, mtc_rec
                 elapsed_ms = current_check_ms - verify_mtc_ms
                 print(f"   [{i+1}s] MTC time: {mtc_receiver.get_current_time_string()} ({current_check_ms} ms, +{elapsed_ms} ms)")
         
-        print("✓ Playback test completed (15 seconds)")
+        print(f"✓ Playback test completed ({play_duration} seconds)")
         
         # Step 4: Stop player (but keep MTC running)
         print("\n[4/4] Stopping player (MTC continues running)...")
@@ -430,12 +453,14 @@ def run_test(test_name, audio_file, player_binary, osc_port, mtc_sender, mtc_rec
 
 def main():
     parser = argparse.ArgumentParser(description='MTC Automated Integration Test for cuems-audioplayer')
-    parser.add_argument('--format', choices=['wav', 'aiff', 'mp3', 'all'], default='all',
-                       help='Audio format to test (default: all)')
+    parser.add_argument('--format', choices=['wav', 'aiff', 'mp3', 'video', 'all'], default='all',
+                       help='Format to test: audio formats (wav, aiff, mp3) or video formats (video), or all (default: all)')
     parser.add_argument('--log', type=str, default=None,
                        help='Log file path for test results (default: MTC_TEST_RESULTS_<timestamp>.log)')
     parser.add_argument('--file', type=str, default=None,
-                       help='Test only a specific audio file (e.g., "test_audio_files/file.wav")')
+                       help='Test only a specific media file (e.g., "test_audio_files/file.wav" or "test_audio_files/video.mp4")')
+    parser.add_argument('--duration', type=int, default=15,
+                       help='How many seconds to play during each test (default: 15)')
     args = parser.parse_args()
     
     # Set up logging to file
@@ -496,11 +521,21 @@ def main():
         sys.exit(1)
     print(f"✓ Player binary found: {player_binary}")
     
-    # Find test audio files
-    test_files_dir = Path("test_audio_files")
-    if not test_files_dir.exists():
-        print(f"✗ Test audio files directory not found: {test_files_dir}")
+    # Find test media files (relative to script location)
+    # Check both test_audio_files and test_video_files directories
+    script_dir = Path(__file__).parent.absolute()
+    test_files_dir = script_dir / "test_audio_files"
+    test_video_dir = script_dir / "test_video_files"
+    
+    # At least one directory should exist
+    if not test_files_dir.exists() and not test_video_dir.exists():
+        print(f"✗ Test media files directories not found:")
+        print(f"  Expected: {test_files_dir} or {test_video_dir}")
         sys.exit(1)
+    
+    # Use test_audio_files as primary (may contain both audio and video)
+    if not test_files_dir.exists():
+        test_files_dir = test_video_dir
     
     # Initialize MTC sender ONCE (runs continuously for all tests)
     print("\n[INIT] Initializing MTC sender...")
@@ -545,43 +580,78 @@ def main():
         test_scenarios = [(test_name, str(test_file))]
         print(f"Testing single file: {test_file}")
     else:
-        # Test scenarios organized by format (WAV → AIFF → MP3 → rest)
+        # Test scenarios organized by format (WAV → AIFF → MP3 → rest → video)
+        # Use script_dir for all paths so it works from any directory
+        # Check both test_audio_files and test_video_files directories
+        if (script_dir / "test_video_files").exists():
+            test_files_prefix = str(script_dir / "test_video_files")
+        else:
+            test_files_prefix = str(script_dir / "test_audio_files")
         all_test_scenarios = {
             'wav': [
-                ("WAV 44.1kHz 16-bit", "test_audio_files/*_44100_16bit.wav"),
-                ("WAV 44.1kHz 24-bit", "test_audio_files/*_44100_24bit.wav"),
-                ("WAV 44.1kHz 32-bit", "test_audio_files/*_44100_32bit.wav"),
-                ("WAV 48kHz 16-bit (resampling)", "test_audio_files/*_48000_16bit.wav"),
-                ("WAV 48kHz 24-bit (resampling)", "test_audio_files/*_48000_24bit.wav"),
+                ("WAV 44.1kHz 16-bit", f"{test_files_prefix}/*_44100_16bit.wav"),
+                ("WAV 44.1kHz 24-bit", f"{test_files_prefix}/*_44100_24bit.wav"),
+                ("WAV 44.1kHz 32-bit", f"{test_files_prefix}/*_44100_32bit.wav"),
+                ("WAV 48kHz 16-bit (resampling)", f"{test_files_prefix}/*_48000_16bit.wav"),
+                ("WAV 48kHz 24-bit (resampling)", f"{test_files_prefix}/*_48000_24bit.wav"),
             ],
         'aiff': [
-            ("AIFF 44.1kHz 16-bit", "test_audio_files/*_44100_16bit.aiff"),
-            ("AIFF 44.1kHz 24-bit", "test_audio_files/*_44100_24bit.aiff"),
-            ("AIFF 44.1kHz 32-bit", "test_audio_files/*_44100_32bit.aiff"),
-            ("AIFF 48kHz 16-bit (resampling)", "test_audio_files/*_48000_16bit.aiff"),
-            ("AIFF 48kHz 24-bit (resampling)", "test_audio_files/*_48000_24bit.aiff"),
+            ("AIFF 44.1kHz 16-bit", f"{test_files_prefix}/*_44100_16bit.aiff"),
+            ("AIFF 44.1kHz 24-bit", f"{test_files_prefix}/*_44100_24bit.aiff"),
+            ("AIFF 44.1kHz 32-bit", f"{test_files_prefix}/*_44100_32bit.aiff"),
+            ("AIFF 48kHz 16-bit (resampling)", f"{test_files_prefix}/*_48000_16bit.aiff"),
+            ("AIFF 48kHz 24-bit (resampling)", f"{test_files_prefix}/*_48000_24bit.aiff"),
         ],
         'mp3': [
-            ("MP3 44.1kHz 128k", "test_audio_files/*_44100_128k.mp3"),
-            ("MP3 44.1kHz 192k", "test_audio_files/*_44100_192k.mp3"),
-            ("MP3 44.1kHz 256k", "test_audio_files/*_44100_256k.mp3"),
-            ("MP3 44.1kHz 320k", "test_audio_files/*_44100_320k.mp3"),
-            ("MP3 48kHz 192k (resampling)", "test_audio_files/*_48000_192k.mp3"),
+            ("MP3 44.1kHz 128k", f"{test_files_prefix}/*_44100_128k.mp3"),
+            ("MP3 44.1kHz 192k", f"{test_files_prefix}/*_44100_192k.mp3"),
+            ("MP3 44.1kHz 256k", f"{test_files_prefix}/*_44100_256k.mp3"),
+            ("MP3 44.1kHz 320k", f"{test_files_prefix}/*_44100_320k.mp3"),
+            ("MP3 48kHz 192k (resampling)", f"{test_files_prefix}/*_48000_192k.mp3"),
         ],
         'other': [
-            ("FLAC 44.1kHz", "test_audio_files/*_44100_flac*.flac"),
-            ("OGG 44.1kHz", "test_audio_files/*_44100_ogg*.ogg"),
-            ("OPUS 48kHz", "test_audio_files/*_48000_opus*.opus"),
-            ("AAC 44.1kHz", "test_audio_files/*_44100_aac*.m4a"),
+            ("FLAC 44.1kHz", f"{test_files_prefix}/*_44100_flac*.flac"),
+            ("OGG 44.1kHz", f"{test_files_prefix}/*_44100_ogg*.ogg"),
+            ("OPUS 48kHz", f"{test_files_prefix}/*_48000_opus*.opus"),
+            ("AAC 44.1kHz", f"{test_files_prefix}/*_44100_aac*.m4a"),
+        ],
+        'video': [
+            # Test all video files in test_video_files directory
+            # Get all video files and create test scenarios for each
         ]
     }
         
         # Select test scenarios based on format argument
         if args.format == 'all':
             test_scenarios = []
-            # Test in order: WAV → AIFF → MP3 → rest
-            for format_key in ['wav', 'aiff', 'mp3', 'other']:
+            # Test in order: WAV → AIFF → MP3 → other audio → video
+            for format_key in ['wav', 'aiff', 'mp3', 'other', 'video']:
                 test_scenarios.extend(all_test_scenarios[format_key])
+        elif args.format == 'video':
+            # For video format, test all files in test_video_files directory
+            test_scenarios = []
+            video_extensions = ['.mp4', '.mkv', '.avi', '.mov', '.m4v', '.webm', '.flv']
+            if test_video_dir.exists():
+                # Get all video files from test_video_files directory
+                video_files = []
+                for ext in video_extensions:
+                    video_files.extend(glob.glob(str(test_video_dir / f"*{ext}")))
+                    video_files.extend(glob.glob(str(test_video_dir / f"*{ext.upper()}")))
+                
+                # Sort files for consistent testing order
+                video_files.sort()
+                
+                # Create a test scenario for each video file
+                for video_file in video_files:
+                    video_path = Path(video_file)
+                    # Create a descriptive test name from the filename
+                    test_name = f"Video: {video_path.name}"
+                    test_scenarios.append((test_name, str(video_path)))
+                
+                if not test_scenarios:
+                    print(f"⚠ No video files found in {test_video_dir}")
+            else:
+                print(f"⚠ Video directory not found: {test_video_dir}")
         else:
             test_scenarios = all_test_scenarios.get(args.format, [])
     
@@ -601,6 +671,12 @@ def main():
         if args.file:
             # For single file test, pattern is already the file path
             audio_file = Path(pattern)
+        elif args.format == 'video':
+            # For video format, pattern is already the full file path (from test_video_files)
+            audio_file = Path(pattern)
+            if not audio_file.exists():
+                print(f"\n⚠ Skipping {test_name}: File not found: {audio_file}")
+                continue
         else:
             files = glob.glob(pattern)
             if not files:
@@ -611,11 +687,11 @@ def main():
         
         # Run test with dynamic offset calculation from current MTC time
         if mtc_receiver:
-            success = run_test(test_name, audio_file, player_binary, osc_port, mtc_sender, mtc_receiver, base_port + port_counter, use_pw_jack)
+            success = run_test(test_name, audio_file, player_binary, osc_port, mtc_sender, mtc_receiver, base_port + port_counter, use_pw_jack, args.duration)
         else:
             # Fallback: use static offset if receiver not available
             print(f"\n⚠ Using static offset (MTC receiver not available)")
-            success = run_test(test_name, audio_file, player_binary, osc_port, mtc_sender, None, base_port + port_counter, use_pw_jack)
+            success = run_test(test_name, audio_file, player_binary, osc_port, mtc_sender, None, base_port + port_counter, use_pw_jack, args.duration)
         
         results.append((test_name, success))
         port_counter += 1
