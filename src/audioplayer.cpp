@@ -236,10 +236,28 @@ AudioPlayer::AudioPlayer(   int port,
     
 
     try {
+        // For JACK/pw-jack: Query the device's native sample rate to avoid mismatch
+        // This is crucial for pw-jack compatibility where the server rate may differ
+        unsigned int requestedRate = sampleRate;  // Start with constructor's rate
+        
+        try {
+            RtAudio::DeviceInfo deviceInfo = audio.getDeviceInfo(audioDeviceId);
+            if (deviceInfo.probed && deviceInfo.sampleRates.size() > 0) {
+                // Use the device's preferred (first) sample rate
+                requestedRate = deviceInfo.sampleRates[0];
+                CuemsLogger::getLogger()->logInfo("Using device native sample rate: " + 
+                    std::to_string(requestedRate) + " Hz");
+            }
+        } catch (...) {
+            // If we can't query, stick with requested rate
+            CuemsLogger::getLogger()->logInfo("Could not query device sample rate, using requested: " + 
+                std::to_string(requestedRate) + " Hz");
+        }
+        
         audio.openStream(  &streamParams, 
                             NULL, 
                             RTAUDIO_FLOAT32,  // JACK's native format
-                            sampleRate, 
+                            requestedRate,     // Use device's native rate
                             &bufferFrames, 
                             &audioCallback,
                             (void *) this,
@@ -249,9 +267,15 @@ AudioPlayer::AudioPlayer(   int port,
         
         // Get actual JACK sample rate (JACK is the master)
         unsigned int jackSampleRate = audio.getStreamSampleRate();
-        if (jackSampleRate != 0 && jackSampleRate != sampleRate) {
-            CuemsLogger::getLogger()->logInfo("JACK sample rate: " + std::to_string(jackSampleRate) + 
-                                               " Hz (requested was " + std::to_string(sampleRate) + " Hz)");
+        if (jackSampleRate != 0) {
+            if (jackSampleRate != sampleRate) {
+                CuemsLogger::getLogger()->logInfo("JACK server sample rate: " + std::to_string(jackSampleRate) + 
+                                                   " Hz (application default was " + std::to_string(sampleRate) + " Hz, will resample)");
+            } else {
+                CuemsLogger::getLogger()->logInfo("JACK server sample rate: " + std::to_string(jackSampleRate) + " Hz");
+            }
+            
+            // Use JACK's sample rate
             sampleRate = jackSampleRate;
             
             // Recalculate timing with actual JACK sample rate
@@ -261,11 +285,9 @@ AudioPlayer::AudioPlayer(   int port,
             // Recalculate offset with correct sample rate
             headOffset = (initOffset + XJADEO_ADJUSTMENT) * audioMillisecondSize;
             // Note: With FFmpeg, headers are handled internally - no manual offset needed
-        } else if (jackSampleRate != 0) {
-            CuemsLogger::getLogger()->logInfo("JACK sample rate: " + std::to_string(jackSampleRate) + " Hz");
         }
         
-        // Configure resampling in audio file if needed
+        // Configure resampling in audio file if needed (libsoxr will handle rate conversion)
         audioFile.setTargetSampleRate(sampleRate);
     }
     catch (RtAudioError &error) {
