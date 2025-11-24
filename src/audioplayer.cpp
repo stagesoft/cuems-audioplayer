@@ -455,7 +455,9 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
                 }
                 else {
                     CuemsLogger::getLogger()->logInfo("Out of file boundaries!");
-                    if ( ap->audioFile.eof() ){} ap->audioFile.clear();
+                    // Clear error flags to allow responding to future offset changes
+                    // (e.g., when OSC offset command moves position back into bounds)
+                    ap->audioFile.clear();
                     ap->endOfStream = true;
                     ap->outOfFile = true;
                 }
