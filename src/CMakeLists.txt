@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.10)
 
-# Project name and version
-project(cuems_audioplayer VERSION 0.0)
+# Project name and version (inherited from parent, but define here for subdirectory)
+project(cuems_audioplayer VERSION 0.0.3)
 
 # Debug postfix
 set(CMAKE_DEBUG_POSTFIX _dbg)

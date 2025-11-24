@@ -351,8 +351,9 @@ int main( int argc, char *argv[] ) {
 //////////////////////////////////////////////////////////
 void showcopyright( void ) {
     std::cout << "audioplayer-cuems v. " << 
-        cuems_audioplayer_VERSION_MAJOR << "." << cuems_audioplayer_VERSION_MINOR <<
-        " - Copyright (C) 2020 Stage Lab Coop" << endl <<
+        cuems_audioplayer_VERSION_MAJOR << "." << cuems_audioplayer_VERSION_MINOR << 
+        "." << cuems_audioplayer_VERSION_PATCH <<
+        " - Copyright (C) 2020-2025 Stage Lab Coop" << endl <<
         "This program comes with ABSOLUTELY NO WARRANTY; for details type `show w'." << endl <<
         "This is free software, and you are welcome to redistribute it" << endl <<
         "under certain conditions; type `show c' for details." << endl << endl;
