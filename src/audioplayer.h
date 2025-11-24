@@ -35,8 +35,8 @@
 #ifndef XJADEO_ADJUSTMENT
 #define XJADEO_ADJUSTMENT 0
 #endif
-#ifndef MTC_FRAMES_TOLLERANCE
-#define MTC_FRAMES_TOLLERANCE 2
+#ifndef MTC_FRAMES_TOLERANCE
+#define MTC_FRAMES_TOLERANCE 2
 #endif
 
 #include <atomic>
@@ -68,13 +68,14 @@ class AudioPlayer : public OscReceiver
                         long int finalWait = 0,
                         const string oscRoute = "/",
                         const string filePath = "", 
-                        const string uuid = "",
                         const string deviceName = "",
+                        const string &client_name = "Audio_Player",
                         const bool stopOnLostFlag = true,
                         const bool mtcFollowFlag = false,
                         unsigned int numberOfChannels = 2, 
-                        unsigned int sRate = 44100, 
-                        RtAudio::Api audioApi = RtAudio::Api::UNIX_JACK );
+                        unsigned int sRate = 44100,
+                        RtAudio::Api audioApi = RtAudio::Api::UNIX_JACK,
+                        const string &resampleQuality = "hq" );
         ~AudioPlayer( void );
         //////////////////////////////////////////
 
@@ -90,7 +91,7 @@ class AudioPlayer : public OscReceiver
         unsigned int audioSecondSize;                   // Audio second size in bytes
         unsigned int audioMillisecondSize;              // Audio millisecond size in bytes
 
-        short int* intermediate;                        // Audio samples intermediate buffer
+        float* intermediate;                            // Audio samples intermediate buffer (32-bit float for JACK)
         float* volumeMaster;                            // Volumen master multiplier
 
         // Our midi, osc and audio objects
@@ -99,10 +100,10 @@ class AudioPlayer : public OscReceiver
         AudioFstream audioFile;
 
         // Stream and playing control flags and vars
-        static bool endOfStream;                // Is the end of the stream reached already?
-        static bool endOfPlay;                  // Are we done playing and waiting?
-        static bool outOfFile;                  // Is our head out of our file boundaries?
-        long int endTimeStamp = 0;              // Our finish timestamp to calculate end wait
+        static std::atomic <bool> endOfStream;                // Is the end of the stream reached already?
+        static std::atomic <bool> endOfPlay;                  // Are we done playing and waiting?
+        static std::atomic <bool> outOfFile;                  // Is our head out of our file boundaries?
+        std::atomic<long int> endTimeStamp{0};  // Our finish timestamp to calculate end wait (atomic for thread safety)
         bool followingMtc;               // Is player following MTC?
 
         // Playing head vars and flags
@@ -112,10 +113,10 @@ class AudioPlayer : public OscReceiver
         // float headAccel;                       // Head acceleration (TO DO)
         std::atomic<int> playheadControl = 1;       // Head reading direction
 
-        unsigned int headStep = 2;              // Head step per channel, by now SINT16 format, 2 bytes
-        long int headOffset = 0;                // Head offset
-        bool offsetChanged = false;             // Flag to recognise when the offset is OSC changed
-        long int headNewOffset = 0;             // Head offset to update through OSC
+        unsigned int headStep = 4;              // Head step per channel, FLOAT32 format, 4 bytes
+        std::atomic<long int> headOffset{0};    // Head offset (atomic: read/written from multiple threads)
+        std::atomic <bool> offsetChanged = false;             // Flag to recognise when the offset is OSC changed
+        std::atomic<long int> headNewOffset{0}; // Head offset to update through OSC (atomic for safety)
 
         long int endWaitTime = 0;               // End time to wait before quitting
 

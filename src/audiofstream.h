@@ -31,52 +31,101 @@
 #define AUDIOFSTREAM_H
 
 #include <iostream>
-#include <fstream>
 #include <vector>
 #include <iomanip>
+#include <string>
+#include <soxr.h>
+
+#include "cuems_mediadecoder/MediaFileReader.h"
+#include "cuems_mediadecoder/AudioDecoder.h"
+#include "cuems_mediadecoder/FFmpegUtils.h"
+
+extern "C" {
+#include <libavutil/avutil.h>
+#include <libswresample/swresample.h>
+}
+
 #include "cuemslogger.h"
 #include "cuems_errors.h"
 
 using namespace std;
 
-class AudioFstream : public ifstream
+class AudioFstream
 {
-    typedef struct {
-        char id[5] = "    ";
-        unsigned long int size = 0;
-    } subChunk;
-
     public:
         AudioFstream(   const string filename = "", 
                         ios_base::openmode openmode = ios_base::in | ios_base::binary );
-        inline ~AudioFstream() { };
+        ~AudioFstream();
 
-        struct headerData {
-            // "RIFF" & "WAVE" headers
-            char RIFFID[5] = "    ";
-            unsigned long int RIFFSize = 0;
-            unsigned long int fileSize = 0;
-            char WAVEID[5] = "    ";
-
-            // "fmt " header data
-            unsigned long int SubChunk1Size = 0;
-            unsigned int AudioFormat = 0;
-            unsigned int NumChannels = 0;
-            unsigned long int SampleRate = 0;
-            unsigned long int ByteRate = 0;
-            unsigned int BlockAlign = 0;
-            unsigned int BitsPerSample = 0;
-            
-            vector<subChunk> subHeaders;
-
-            unsigned long int dataSize = 0;
-        } headerData;
-
-        bool checkHeader( void );
+        // Stream-like interface for compatibility
+        void read(char* buffer, size_t bytes);  // Outputs 32-bit float samples
+        void seekg(long long pos, ios_base::seekdir dir);
+        streamsize gcount() const;
+        bool eof() const;
+        bool good() const;
+        bool bad() const;
+        void clear();
+        void close();
+        void open(const string path, ios_base::openmode mode);
         bool loadFile( const string path );
 
-        unsigned int headerSize = 0;
+        // Methods for resampling
+        void setTargetSampleRate(unsigned int rate);
+        void setResampleQuality(const string& quality);
+        void setTargetChannels(unsigned int channels);  // Set target channel count for downmixing
+        
+        // File information accessors (for compatibility with audioplayer.cpp)
+        unsigned long long getFileSize() const;
+        unsigned int getChannels() const;
+        unsigned int getSampleRate() const;
+        unsigned int getBitsPerSample() const;
 
+    private:
+        // cuems-mediadecoder members
+        cuems_mediadecoder::MediaFileReader fileReader;
+        cuems_mediadecoder::AudioDecoder audioDecoder;
+        AVPacket* packet;
+        AVFrame* frame;
+        SwrContext* swrContext;
+        int audioStreamIndex;
+        
+        // File state
+        bool fileOpen;
+        bool eofReached;
+        bool errorState;
+        streamsize lastBytesRead;
+        
+        // Audio properties
+        unsigned int fileChannels;
+        unsigned int fileSampleRate;
+        unsigned int fileBitsPerSample;
+        int64_t totalSamples;
+        unsigned long long fileSize;  // For boundary checks (in bytes, for 32-bit float output)
+        int64_t currentSamplePos;
+        
+        // Format conversion buffer (FFmpeg decoded → float for libsoxr)
+        float* conversionBuffer;
+        size_t conversionBufferSize;  // in floats
+        size_t conversionBufferUsed;  // floats currently in buffer
+        size_t conversionBufferPos;   // read position in buffer
+
+        // Resampling members (libsoxr - unchanged)
+        unsigned int targetSampleRate;
+        unsigned int targetChannels;  // Target channel count for downmixing (0 = use file's channels)
+        soxr_t resampler;
+        bool resamplingEnabled;
+        soxr_quality_spec_t qualitySpec;
+        float* resampleInputBuffer;
+        float* resampleOutputBuffer;
+        size_t resampleBufferSize;
+
+        // Helper methods
+        void initializeResampler();
+        void cleanupResampler();
+        void cleanupFFmpeg();
+        soxr_quality_spec_t parseQualityString(const string& quality);
+        bool decodeNextFrame();  // Decode one frame from FFmpeg
+        string getFFmpegError(int errnum);  // Translate FFmpeg error codes
 };
 
 #endif // AUDIOFSTREAM_H

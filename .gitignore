@@ -38,3 +38,9 @@ audioplayer-cuems
 
 #CMake build dir
 build/**
+
+# Large media assets generated locally
+stress_test_files/
+test_audio_files/
+audio/
+.cache/

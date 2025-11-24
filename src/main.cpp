@@ -233,6 +233,37 @@ int main( int argc, char *argv[] ) {
             mtcFollowFlag = true ;
     }
 
+    // --resample-quality or -r command parse and quality retreival and check
+    string resampleQuality = "hq";  // Default to high quality
+
+    if ( argParser->optionExists("--resample-quality") || argParser->optionExists("-r") ) {
+        std::string qualityParam = argParser->getParam("--resample-quality");
+
+        if ( qualityParam.empty() ) qualityParam = argParser->getParam("-r");
+
+        if ( qualityParam.empty() ) {
+            // Not valid quality specified after option
+            std::cout << "Not valid quality string after --resample-quality or -r option." << endl;
+            std::cout << "Valid options: vhq (very high), hq (high, default), mq (medium), lq (low)" << endl;
+
+            logger->getLogger()->logError( "Exiting with result code: " + std::to_string(CUEMS_EXIT_WRONG_PARAMETERS) );
+
+            exit( CUEMS_EXIT_WRONG_PARAMETERS );
+        }
+        else {
+            // Validate quality string
+            if (qualityParam != "vhq" && qualityParam != "hq" && qualityParam != "mq" && qualityParam != "lq") {
+                std::cout << "Invalid resample quality: " << qualityParam << endl;
+                std::cout << "Valid options: vhq (very high), hq (high, default), mq (medium), lq (low)" << endl;
+
+                logger->getLogger()->logError( "Exiting with result code: " + std::to_string(CUEMS_EXIT_WRONG_PARAMETERS) );
+
+                exit( CUEMS_EXIT_WRONG_PARAMETERS );
+            }
+            resampleQuality = qualityParam;
+        }
+    }
+
     delete argParser;
 
     // End of command line parsing
@@ -241,8 +272,17 @@ int main( int argc, char *argv[] ) {
 
     // Now that we now a more detailed information on the specific player
     // we change the logger slug to reflect this identification on the logs
-    logger->setNewSlug("a" + std::to_string(portNumber) + processUuid); 
 
+    //logger->setNewSlug("a" + std::to_string(portNumber) + processUuid);
+
+    // (proto_fruta) if we got a uiid from command line options use only that
+    if (!processUuid.empty()){
+        logger->setNewSlug("d" + processUuid);
+    } else {
+        logger->setNewSlug("d" + std::to_string(portNumber));
+        // and set processUuid to port number for midi visibility
+        processUuid = std::to_string(portNumber);
+    }
 
     if ( filePath.empty() || portNumber == 0 ) {
         std::cout << "Wrong parameters! Check usage..." << endl << endl;
@@ -254,14 +294,21 @@ int main( int argc, char *argv[] ) {
         exit ( CUEMS_EXIT_WRONG_PARAMETERS );
     }
     else {
-        myAudioPlayer = new AudioPlayer(    portNumber, 
-                                            offsetMilliseconds, 
-                                            endWaitMilliseconds, 
-                                            "", 
-                                            filePath.c_str(),
-                                            processUuid,
-                                            audioDeviceName, 
-                                            stopOnLostFlag );
+        myAudioPlayer = new AudioPlayer(
+            portNumber,
+            offsetMilliseconds,
+            endWaitMilliseconds,
+            "",
+            filePath.c_str(),
+            audioDeviceName,
+            "Audio_Player-" + processUuid,
+            stopOnLostFlag,
+            mtcFollowFlag,
+            2,  // Default 2 channels
+            44100,  // Default sample rate (will be overridden by JACK)
+            RtAudio::Api::UNIX_JACK,
+            resampleQuality
+        );
 
         logger->logOK("AudioPlayer object created OK!");
     }
@@ -354,6 +401,9 @@ void showusage( void ) {
         "           --offset , -o <milliseconds> : playing time offset in milliseconds." << endl <<
         "               Positive (+) or (-) negative integer indicating time displacement." << endl <<
         "               Default is 0." << endl << endl <<
+        "           --resample-quality , -r <quality> : resampling quality when file sample rate differs from" << endl <<
+        "               JACK sample rate. Options: vhq (very high), hq (high, default), mq (medium), lq (low)." << endl <<
+        "               Higher quality = better audio but more CPU usage. Default is 'hq'." << endl << endl <<
         "           --uuid , -u <uuid_string> : indicates a unique identifier for the process to be recognized" << endl <<
         "               in different internal identification porpouses such as Jack streams in use." << endl << endl <<
         "           --wait , -w <milliseconds> : waiting time after reaching the end of the file and before" << endl <<

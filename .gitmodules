@@ -7,3 +7,7 @@
 [submodule "src/oscreceiver"]
 	path = src/oscreceiver
 	url = https://github.com/stagesoft/oscreceiver.git
+[submodule "src/cuems-mediadecoder"]
+	path = src/cuems-mediadecoder
+	url = git@github.com:stagesoft/cuems-mediadecoder.git
+	branch = ffmpeg-4.0

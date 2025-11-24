@@ -34,9 +34,9 @@
 // Initializing static class members
 
 std::atomic<long long int> AudioPlayer::playHead(0);
-bool AudioPlayer::endOfStream = false;
-bool AudioPlayer::endOfPlay = false;
-bool AudioPlayer::outOfFile = false;
+std::atomic <bool> AudioPlayer::endOfStream = false;
+std::atomic <bool> AudioPlayer::endOfPlay = false;
+std::atomic <bool> AudioPlayer::outOfFile = false;
 
 //////////////////////////////////////////////////////////
 AudioPlayer::AudioPlayer(   int port, 
@@ -44,23 +44,24 @@ AudioPlayer::AudioPlayer(   int port,
                             long int finalWait,
                             const string oscRoute,
                             const string filePath, 
-                            const string uuid,
                             const string deviceName,
+                            const string &client_name,
                             const bool stopOnLostFlag,
                             const bool mtcFollowFlag,
                             unsigned int numberOfChannels, 
-                            unsigned int sRate, 
-                            RtAudio::Api audioApi )
+                            unsigned int sRate,
+                            RtAudio::Api audioApi,
+                            const string &resampleQuality )
                             :   // Members initialization
                             OscReceiver(port, oscRoute.c_str()),
+                            mtcReceiver(RtMidiIn::LINUX_ALSA, client_name),
                             audioPath(filePath),
                             nChannels(numberOfChannels),
                             sampleRate(sRate),
                             deviceName(deviceName),
                             audio(audioApi),
-                            audioFile(filePath.c_str()),
+                            audioFile(filePath.c_str()),  // Open file to check format
                             endWaitTime(finalWait),
-                            playerUuid(uuid),
                             stopOnMTCLost(stopOnLostFlag),
                             followingMtc(mtcFollowFlag)
  {
@@ -72,20 +73,23 @@ AudioPlayer::AudioPlayer(   int port,
     //////////////////////////////////////////////////////////
     // Set up working class members
 
-    // Audio frame size calc
+    // Set resample quality before opening audio stream
+    audioFile.setResampleQuality(resampleQuality);
+
+    // Audio frame size calc (will be updated with actual JACK sample rate later)
     audioFrameSize = nChannels * headStep;
     audioSecondSize = sampleRate * audioFrameSize;
     audioMillisecondSize = ( (float) sampleRate / 1000 ) * audioFrameSize;
 
     // Adjust initial offset
     //      NOTE: Hardcoded 50 ms offset while testing sync with Xjadeo
-    headOffset = (initOffset + XJADEO_ADJUSTMENT) * audioMillisecondSize;
-    headOffset += audioFile.headerSize;
+    headOffset.store((initOffset + XJADEO_ADJUSTMENT) * audioMillisecondSize);
+    // Note: With FFmpeg, headers are handled internally - no manual offset needed
 
     // If we have a positive offset initialli we can already
     // seek the file to its proper initial position
-    if ( (playHead + headOffset) >= 0 )
-        audioFile.seekg( playHead + headOffset , ios_base::beg );
+    if ( (playHead + headOffset.load()) >= 0 )
+        audioFile.seekg( playHead + headOffset.load() , ios_base::beg );
 
     // Per channel volume param to process audio
     volumeMaster = new float[nChannels];
@@ -93,14 +97,14 @@ AudioPlayer::AudioPlayer(   int port,
         volumeMaster[i] = 1.0;
     }
 
-    // Per channel process buffer
-    intermediate = new short int[nChannels];
+    // Per channel process buffer (32-bit float for JACK)
+    intermediate = new float[nChannels];
 
 
     //////////////////////////////////////////////////////////
     // Setting our audio stream parameters
     // Check for audio devices
-    int audioDeviceId = 0;
+    int audioDeviceId = -1;
     try {
         int deviceCount = audio.getDeviceCount();
         if ( deviceCount == 0 ) {
@@ -118,17 +122,94 @@ AudioPlayer::AudioPlayer(   int port,
             exit( CUEMS_EXIT_AUDIO_DEVICE_ERR );
         }
         else {
+            // Helper function to check if a device is suitable
+            auto isDeviceSuitable = [&](int deviceId) -> bool {
+                try {
+                    RtAudio::DeviceInfo info = audio.getDeviceInfo(deviceId);
+                    // Check if device is probed successfully and has enough output channels
+                    return info.probed && 
+                           info.outputChannels >= nChannels;
+                } catch (...) {
+                    return false;
+                }
+            };
+
+            // First, try to find device by name (if specified)
             bool found = false;
-            for(audioDeviceId = 0; audioDeviceId < deviceCount; ++audioDeviceId) {
-                RtAudio::DeviceInfo info = audio.getDeviceInfo(audioDeviceId);
-                if (info.name == deviceName) {
-                    found = true;
-                    break;
+            if (!deviceName.empty()) {
+                for(int i = 0; i < deviceCount; ++i) {
+                    try {
+                        RtAudio::DeviceInfo info = audio.getDeviceInfo(i);
+                        if (info.name == deviceName && isDeviceSuitable(i)) {
+                            audioDeviceId = i;
+                            found = true;
+                            CuemsLogger::getLogger()->logInfo("Found specified device: " + deviceName);
+                            break;
+                        }
+                    } catch (...) {
+                        // Skip devices that fail to probe
+                        continue;
+                    }
                 }
             }
 
+            // If device name not found or not suitable, find any suitable output device
             if (!found) {
-                audioDeviceId = audio.getDefaultOutputDevice();
+                // Try default output device first
+                int defaultDevice = audio.getDefaultOutputDevice();
+                if (defaultDevice >= 0 && defaultDevice < deviceCount && isDeviceSuitable(defaultDevice)) {
+                    audioDeviceId = defaultDevice;
+                    found = true;
+                    CuemsLogger::getLogger()->logInfo("Using default output device");
+                } else {
+                    // Iterate through all devices to find a suitable one
+                    for(int i = 0; i < deviceCount; ++i) {
+                        if (isDeviceSuitable(i)) {
+                            audioDeviceId = i;
+                            found = true;
+                            try {
+                                RtAudio::DeviceInfo info = audio.getDeviceInfo(i);
+                                CuemsLogger::getLogger()->logInfo("Using device: " + info.name + 
+                                    " (" + std::to_string(info.outputChannels) + " output channels)");
+                            } catch (...) {
+                                CuemsLogger::getLogger()->logInfo("Using device ID: " + std::to_string(i));
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // If still no suitable device found, provide detailed error
+            if (!found || audioDeviceId < 0) {
+                std::string str = "No suitable audio output device found. ";
+                str += "Required: " + std::to_string(nChannels) + " output channels. ";
+                str += "Available devices:";
+                
+                std::cerr << str << endl;
+                CuemsLogger::getLogger()->logError(str);
+                
+                // List available devices for debugging
+                for(int i = 0; i < deviceCount; ++i) {
+                    try {
+                        RtAudio::DeviceInfo info = audio.getDeviceInfo(i);
+                        std::string deviceStr = "  Device " + std::to_string(i) + ": " + info.name;
+                        deviceStr += " (probed: " + std::string(info.probed ? "yes" : "no");
+                        deviceStr += ", output channels: " + std::to_string(info.outputChannels) + ")";
+                        std::cerr << deviceStr << endl;
+                        CuemsLogger::getLogger()->logError(deviceStr);
+                    } catch (...) {
+                        std::string deviceStr = "  Device " + std::to_string(i) + ": (failed to probe)";
+                        std::cerr << deviceStr << endl;
+                        CuemsLogger::getLogger()->logError(deviceStr);
+                    }
+                }
+
+                str = "Maybe JACK NOT RUNNING or no suitable output device available!";
+                std::cerr << str << endl;
+                CuemsLogger::getLogger()->logError(str);
+
+                exit( CUEMS_EXIT_AUDIO_DEVICE_ERR );
             }
         }
     }
@@ -147,19 +228,122 @@ AudioPlayer::AudioPlayer(   int port,
     streamParams.firstChannel = 0;
 
     RtAudio::StreamOptions streamOps;
-    streamOps.streamName = "a" + to_string(oscPort) + playerUuid;
+
+    // proto fruta, if we got uuid use only that
+
+
+    streamOps.streamName = client_name;
+    
 
     try {
+        // For JACK/pw-jack: Query the device's native sample rate to avoid mismatch
+        // This is crucial for pw-jack compatibility where the server rate may differ
+        unsigned int requestedRate = sampleRate;  // Start with constructor's rate
+        
+        try {
+            RtAudio::DeviceInfo deviceInfo = audio.getDeviceInfo(audioDeviceId);
+            if (deviceInfo.probed && deviceInfo.sampleRates.size() > 0) {
+                // Use the device's preferred (first) sample rate
+                requestedRate = deviceInfo.sampleRates[0];
+                CuemsLogger::getLogger()->logInfo("Using device native sample rate: " + 
+                    std::to_string(requestedRate) + " Hz");
+            }
+        } catch (...) {
+            // If we can't query, stick with requested rate
+            CuemsLogger::getLogger()->logInfo("Could not query device sample rate, using requested: " + 
+                std::to_string(requestedRate) + " Hz");
+        }
+        
         audio.openStream(  &streamParams, 
                             NULL, 
-                            RTAUDIO_SINT16, 
-                            sampleRate, 
+                            RTAUDIO_FLOAT32,  // JACK's native format
+                            requestedRate,     // Use device's native rate
                             &bufferFrames, 
                             &audioCallback,
                             (void *) this,
                             &streamOps );
 
         audio.startStream();
+        
+        // Get actual JACK sample rate (JACK is the master)
+        unsigned int jackSampleRate = audio.getStreamSampleRate();
+        if (jackSampleRate != 0) {
+            if (jackSampleRate != sampleRate) {
+                CuemsLogger::getLogger()->logInfo("JACK server sample rate: " + std::to_string(jackSampleRate) + 
+                                                   " Hz (application default was " + std::to_string(sampleRate) + " Hz, will resample)");
+            } else {
+                CuemsLogger::getLogger()->logInfo("JACK server sample rate: " + std::to_string(jackSampleRate) + " Hz");
+            }
+            
+            // Use JACK's sample rate
+            sampleRate = jackSampleRate;
+            
+            // Recalculate timing with actual JACK sample rate
+            audioSecondSize = sampleRate * audioFrameSize;
+            audioMillisecondSize = ( (float) sampleRate / 1000 ) * audioFrameSize;
+            
+            // Recalculate offset with correct sample rate
+            headOffset.store((initOffset + XJADEO_ADJUSTMENT) * audioMillisecondSize);
+            // Note: With FFmpeg, headers are handled internally - no manual offset needed
+        }
+        
+        // Check if we already have a valid audio file
+        if (!audioFile.good()) {
+            std::string str = "Error opening audio file: " + audioPath;
+            std::cerr << str << endl;
+            CuemsLogger::getLogger()->logError(str);
+            exit(CUEMS_EXIT_AUDIO_DEVICE_ERR);
+        }
+        
+        // Get the file's actual channel count
+        unsigned int fileChannels = audioFile.getChannels();
+        
+        // Get device capabilities
+        RtAudio::DeviceInfo deviceInfo = audio.getDeviceInfo(audioDeviceId);
+        unsigned int deviceChannels = deviceInfo.outputChannels;
+        
+        // Determine target channels: use file's channels if device supports it, otherwise downmix
+        // This is how mpv does it - only downmix when necessary
+        if (fileChannels > deviceChannels) {
+            // File has more channels than device supports, need to downmix
+            std::cerr << "Device supports " << deviceChannels << " channels, file has " 
+                      << fileChannels << " channels - will downmix" << endl;
+            CuemsLogger::getLogger()->logInfo("Downmixing " + std::to_string(fileChannels) + 
+                                              " channels to " + std::to_string(deviceChannels) + 
+                                              " channels to match device capabilities");
+            
+            // Reopen the file with downmixing
+            audioFile.close();
+            audioFile.setTargetChannels(deviceChannels);
+            audioFile.open(audioPath, ios::binary | ios::in);
+            
+            if (!audioFile.good()) {
+                std::string str = "Error reopening audio file with downmixing: " + audioPath;
+                std::cerr << str << endl;
+                CuemsLogger::getLogger()->logError(str);
+                exit(CUEMS_EXIT_AUDIO_DEVICE_ERR);
+            }
+            
+            // Update nChannels to match downmixed output
+            nChannels = deviceChannels;
+        } else if (fileChannels < nChannels) {
+            // File has fewer channels than requested, use file's channel count
+            std::cerr << "File has " << fileChannels << " channels, using that instead of requested " 
+                      << nChannels << " channels" << endl;
+            CuemsLogger::getLogger()->logInfo("Using file's " + std::to_string(fileChannels) + 
+                                              " channels (device supports " + std::to_string(deviceChannels) + ")");
+            nChannels = fileChannels;
+        } else {
+            // Device has enough channels, use file's native channel count
+            std::cerr << "Playing " << fileChannels << " channels (device supports " 
+                      << deviceChannels << " channels)" << endl;
+            CuemsLogger::getLogger()->logInfo("Playing " + std::to_string(fileChannels) + 
+                                              " channels (device supports " + std::to_string(deviceChannels) + ")");
+            nChannels = fileChannels;
+        }
+        
+        // Configure resampling in audio file if needed (libsoxr will handle rate conversion)
+        audioFile.setTargetSampleRate(sampleRate);
     }
     catch (RtAudioError &error) {
         std::cerr << error.getMessage();
@@ -235,37 +419,52 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
         // 1) after MTC: if there is MTC signal then we treat it
         if ( ap->mtcReceiver.isTimecodeRunning && ap->followingMtc && !ap->mtcSignalLost )
         {
-            // Tollerance 2 frames, due to the MTC 8 packages -> 2 frames relay
-            long int tollerance = MTC_FRAMES_TOLLERANCE * ( 1000 / (float) ap->mtcReceiver.curFrameRate ) * ap->audioMillisecondSize;
+            // Tolerance 2 frames, due to the MTC 8 packages -> 2 frames delay
+            // Validate frame rate to prevent division by zero
+            unsigned char frameRate = ap->mtcReceiver.curFrameRate.load();
+            if (frameRate == 0) {
+                frameRate = 25;  // Default to 25fps
+                CuemsLogger::getLogger()->logWarning("MTC frame rate invalid (0), defaulting to 25fps");
+            }
+            long int tolerance = MTC_FRAMES_TOLERANCE * ( 1000 / (float) frameRate ) * ap->audioMillisecondSize;
             
-            long int mtcHeadInBytes = ap->mtcReceiver.mtcHead * ap->audioMillisecondSize ;
+            // Use long long to prevent overflow for long files (multi-hour) with high sample rates
+            long long int mtcHeadInBytes = (long long int)ap->mtcReceiver.mtcHead.load() * ap->audioMillisecondSize;
 
-            long int difference = ap->playHead - mtcHeadInBytes;
+            long long int difference = ap->playHead - mtcHeadInBytes;
 
             // If our audio play head is too late or out of the boundaries of our mtc frame
-            // tollerance... We correct it. Also if the offset changed dinamically via OSC
-            if ( abs(difference) > tollerance || ap->offsetChanged ) {
-                // Set new head
-                ap->playHead = mtcHeadInBytes;
-
+            // tolerance... We correct it. Also if the offset changed dynamically via OSC
+            if ( abs(difference) > tolerance || ap->offsetChanged ) {
                 // Set new OSC offset if any
                 if ( ap->offsetChanged ) {
-                    ap->headOffset = ap->headNewOffset;
+                    ap->headOffset.store(ap->headNewOffset.load());
                     // And reset flag
                     ap->offsetChanged = false;
-                    ap->outOfFile = true;
+                    // Note: Don't set outOfFile here - let the boundary check below determine that
                 }
 
-                // Seek the file with the new coordinates
-                if ( ( (ap->playHead + ap->headOffset) >= 0 ) && 
-                        ( (ap->playHead + ap->headOffset) <= (long long) ap->audioFile.headerData.fileSize ) ){
+                // Calculate the actual seek position in the file (accounting for offset)
+                long long seekPosition = mtcHeadInBytes + ap->headOffset.load();
+                unsigned long long fileSize = ap->audioFile.getFileSize();
+                
+                if ( (seekPosition >= 0) && (seekPosition <= (long long)fileSize) ){
 
                     ap->endOfStream = false;
                     ap->outOfFile = false;
-                    ap->audioFile.seekg( ap->playHead + ap->headOffset , ios_base::beg );
+                    if ( ap->audioFile.eof() ) {
+                        ap->audioFile.clear();
+                    } 
+                    // Seek to the calculated position
+                    ap->audioFile.seekg( seekPosition , ios_base::beg );
+                    // Update playHead to match where we actually are (without offset, as offset is separate)
+                    ap->playHead = seekPosition - ap->headOffset.load();
                 }
                 else {
-                    if ( ap->audioFile.eof() ) ap->audioFile.clear();
+                    CuemsLogger::getLogger()->logInfo("Out of file boundaries!");
+                    // Clear error flags to allow responding to future offset changes
+                    // (e.g., when OSC offset command moves position back into bounds)
+                    ap->audioFile.clear();
                     ap->endOfStream = true;
                     ap->outOfFile = true;
                 }
@@ -276,34 +475,24 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
         // 2) without MTC: we do not treat it but, in any case, we continue playing
         //      while we are not out of the file boundaries
         if ( !ap->outOfFile ) {
-            for ( unsigned int i = 0; i < nBufferFrames; i++ ) {
-                // Per channel reading
-                read = 0;
-                for ( unsigned int i = 0; i < ap->nChannels; i++) {
-                    // Read operation to the intermediate buffer, we read the size of our 
-                    // sample by the number of channels times, from file
-                    // read += fread( &intermediate[i], 1, ap->headStep, file );
-                    if ( (ap->playHead + ap->headOffset) >= 0 ) {
-                        ap->audioFile.read((char*) &ap->intermediate[i], ap->headStep);
-                        read += ap->audioFile.gcount();
-
-                        ap->intermediate[i] *= ap->volumeMaster[i];
-                    }
-                    else {
-                        ap->intermediate[i] = 0;
-
-                        read += ap->headStep;
-                    }
-
+            // Calculate total bytes to read for this buffer
+            unsigned long int bytesToRead = nBufferFrames * ap->audioFrameSize;
+            
+            if ( (ap->playHead + ap->headOffset.load()) >= 0 ) {
+                // Read entire buffer in ONE call - much more efficient for resampling!
+                ap->audioFile.read((char*) outputBuffer, bytesToRead);
+                count = ap->audioFile.gcount();
+                
+                // Apply volume to each sample
+                float* floatBuffer = (float*)outputBuffer;
+                for ( unsigned int i = 0; i < count / 4; i++ ) {
+                    floatBuffer[i] *= ap->volumeMaster[i % ap->nChannels];
                 }
-
-                memcpy((char *)outputBuffer + count, ap->intermediate, ap->audioFrameSize);
-
-                count += read;
-
-                if ( read == 0 ) {
-                    break;
-                }
+            }
+            else {
+                // Before file start - fill with silence
+                memset(outputBuffer, 0, bytesToRead);
+                count = bytesToRead;
             }
 
             ap->playHead += count;
@@ -316,8 +505,6 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
             unsigned long int startByte = count * ap->audioFrameSize;
 
             memset( (char *)(outputBuffer) + startByte, 0, bytes );
-
-            ap->outOfFile = true;
         }
 
         // If we did not read anything, we are out of boundaries, maybe...
@@ -326,15 +513,15 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
             if ( ap->endWaitTime == 0 ) {
                 // If there is not waiting time, we just finish
                 // and we end the stream by returning a positive value
-                ap->endOfStream = true;
                 ap->endOfPlay = true;
+                
                 return 1;
             }
             else {
                 // If we have waiting time set...
-                if ( ap->endTimeStamp == 0 ) {
+                if ( ap->endTimeStamp.load() == 0 ) {
                     // We note down our timestamp
-                    ap->endTimeStamp = chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count();
+                    ap->endTimeStamp.store(chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count());
 
                     std::string str;
                     if ( ap->endWaitTime == __LONG_MAX__ ) 
@@ -344,47 +531,34 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
 
                     CuemsLogger::getLogger()->logInfo("Out of file boundaries, waiting " + str);
                 }
-
+                
                 ap->endOfStream = true;
-                long int timecodeNow = chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count();
 
-                if ( ( timecodeNow - ap->endTimeStamp ) > ap->endWaitTime ) {
+                long int timecodeNow = chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count();
+                
+                if ( ( timecodeNow - ap->endTimeStamp.load() ) > ap->endWaitTime ) {
                     CuemsLogger::getLogger()->logInfo("Waiting time exceded, ending audioplayer");
                     ap->endOfPlay = true;
                     return 1;
                 }
+                
+                
             }
         }
         else {
             ap->endOfStream = false;
             ap->endOfPlay = false;
-            ap->endTimeStamp = 0;
+            ap->endTimeStamp.store(0);
             ap->outOfFile = false;
         }
     }
     // If we are not playing audio... Just copy silence...
     else
     {
-        // Check play control flags
-        // if we already started and we have no MTC signal, and it was 
-        // already lost, it is lost now
-        if (    !ap->mtcReceiver.isTimecodeRunning && 
-                ap->mtcSignalStarted && 
-                !ap->mtcSignalLost ) {
-            CuemsLogger::getLogger()->logInfo("MTC signal lost");
-            ap->mtcSignalLost = true;
-        }
-
+        // MTC signal lost detection is already handled in the main playing branch above (lines 418-422)
+        // No need to duplicate it here
         memset( (char *)(outputBuffer), 0, nBufferFrames * ap->audioFrameSize );
     }
-
-    // At the end, if we are following MTC but it is not running right now
-    // let's fix our head to MTC head now it's stopped
-    /*
-    if ( ! ap->mtcReceiver.isTimecodeRunning && ap->followingMtc ) {
-        ap->playHead = ap->mtcReceiver.mtcHead * ap->audioMillisecondSize;
-    }
-    */
 
     return 0;
 
@@ -432,10 +606,9 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
             // Offset argument in OSC command is in milliseconds
             // so we need to calculate in bytes in our file
 
-            headNewOffset = ( offsetOSC + XJADEO_ADJUSTMENT ) * audioMillisecondSize;             // To bytes
+            headNewOffset.store(( offsetOSC + XJADEO_ADJUSTMENT ) * audioMillisecondSize);  // To bytes
 
-            // Plus the standard header size
-            headNewOffset += audioFile.headerSize;
+            // Note: With FFmpeg, headers are handled internally - no manual offset needed
 
             offsetChanged = true;
 
