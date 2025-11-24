@@ -1,3 +1,4 @@
 // the configured options and settings for cuems-audioplayer
 #define cuems_audioplayer_VERSION_MAJOR @cuems_audioplayer_VERSION_MAJOR@
 #define cuems_audioplayer_VERSION_MINOR @cuems_audioplayer_VERSION_MINOR@
+#define cuems_audioplayer_VERSION_PATCH @cuems_audioplayer_VERSION_PATCH@
