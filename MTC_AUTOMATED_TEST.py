@@ -282,8 +282,8 @@ def run_test(test_name, audio_file, player_binary, osc_port, mtc_sender, mtc_rec
     else:
         print(f"⚠ MTC receiver not available, using initial offset: {offset_ms} ms")
     
-    # Find available port
-    port = port_base
+    # Use the OSC port that was passed in (already calculated with port_counter)
+    port = osc_port
     
     # Step 1: Start player WITHOUT -m flag (MTC following disabled)
     print(f"\n[1/4] Starting player WITHOUT MTC following...")
@@ -440,6 +440,9 @@ def run_test(test_name, audio_file, player_binary, osc_port, mtc_sender, mtc_rec
         except subprocess.TimeoutExpired:
             player_process.kill()
         
+        # Wait a bit for UDP socket to be fully released (TIME_WAIT state)
+        time.sleep(0.5)
+        
         print("✓ Test completed successfully")
         return True
         
@@ -580,71 +583,74 @@ def main():
         test_scenarios = [(test_name, str(test_file))]
         print(f"Testing single file: {test_file}")
     else:
-        # Test scenarios organized by format (WAV → AIFF → MP3 → rest → video)
-        # Use script_dir for all paths so it works from any directory
-        # Check both test_audio_files and test_video_files directories
-        if (script_dir / "test_video_files").exists():
-            test_files_prefix = str(script_dir / "test_video_files")
-        else:
-            test_files_prefix = str(script_dir / "test_audio_files")
-        all_test_scenarios = {
-            'wav': [
-                ("WAV 44.1kHz 16-bit", f"{test_files_prefix}/*_44100_16bit.wav"),
-                ("WAV 44.1kHz 24-bit", f"{test_files_prefix}/*_44100_24bit.wav"),
-                ("WAV 44.1kHz 32-bit", f"{test_files_prefix}/*_44100_32bit.wav"),
-                ("WAV 48kHz 16-bit (resampling)", f"{test_files_prefix}/*_48000_16bit.wav"),
-                ("WAV 48kHz 24-bit (resampling)", f"{test_files_prefix}/*_48000_24bit.wav"),
-            ],
-        'aiff': [
-            ("AIFF 44.1kHz 16-bit", f"{test_files_prefix}/*_44100_16bit.aiff"),
-            ("AIFF 44.1kHz 24-bit", f"{test_files_prefix}/*_44100_24bit.aiff"),
-            ("AIFF 44.1kHz 32-bit", f"{test_files_prefix}/*_44100_32bit.aiff"),
-            ("AIFF 48kHz 16-bit (resampling)", f"{test_files_prefix}/*_48000_16bit.aiff"),
-            ("AIFF 48kHz 24-bit (resampling)", f"{test_files_prefix}/*_48000_24bit.aiff"),
-        ],
-        'mp3': [
-            ("MP3 44.1kHz 128k", f"{test_files_prefix}/*_44100_128k.mp3"),
-            ("MP3 44.1kHz 192k", f"{test_files_prefix}/*_44100_192k.mp3"),
-            ("MP3 44.1kHz 256k", f"{test_files_prefix}/*_44100_256k.mp3"),
-            ("MP3 44.1kHz 320k", f"{test_files_prefix}/*_44100_320k.mp3"),
-            ("MP3 48kHz 192k (resampling)", f"{test_files_prefix}/*_48000_192k.mp3"),
-        ],
-        'other': [
-            ("FLAC 44.1kHz", f"{test_files_prefix}/*_44100_flac*.flac"),
-            ("OGG 44.1kHz", f"{test_files_prefix}/*_44100_ogg*.ogg"),
-            ("OPUS 48kHz", f"{test_files_prefix}/*_48000_opus*.opus"),
-            ("AAC 44.1kHz", f"{test_files_prefix}/*_44100_aac*.m4a"),
-        ],
-        'video': [
-            # Test all video files in test_video_files directory
-            # Get all video files and create test scenarios for each
-        ]
-    }
+        # Test scenarios - iterate through all files in directories like video does
+        test_audio_dir = script_dir / "test_audio_files"
+        test_scenarios = []
         
-        # Select test scenarios based on format argument
         if args.format == 'all':
-            test_scenarios = []
-            # Test in order: WAV → AIFF → MP3 → other audio → video
-            for format_key in ['wav', 'aiff', 'mp3', 'other', 'video']:
-                test_scenarios.extend(all_test_scenarios[format_key])
-        elif args.format == 'video':
-            # For video format, test all files in test_video_files directory
-            test_scenarios = []
+            # Test all audio formats, then video
+            audio_extensions = {
+                'wav': ['.wav', '.WAV'],
+                'aiff': ['.aiff', '.AIFF'],
+                'mp3': ['.mp3', '.MP3'],
+                'other': ['.flac', '.FLAC', '.ogg', '.OGG', '.opus', '.OPUS', '.m4a', '.M4A', '.ac3', '.AC3', '.wma', '.WMA']
+            }
+            
+            # Get all audio files from test_audio_files directory
+            if test_audio_dir.exists():
+                for format_key, extensions in audio_extensions.items():
+                    audio_files = []
+                    for ext in extensions:
+                        audio_files.extend(glob.glob(str(test_audio_dir / f"*{ext}")))
+                    
+                    # Sort files for consistent testing order
+                    audio_files.sort()
+                    
+                    # Create a test scenario for each audio file
+                    for audio_file in audio_files:
+                        audio_path = Path(audio_file)
+                        # Create a descriptive test name from the filename
+                        test_name = f"{format_key.upper()}: {audio_path.name}"
+                        test_scenarios.append((test_name, str(audio_path)))
+                
+                if not any(glob.glob(str(test_audio_dir / f"*{ext}")) for ext_list in audio_extensions.values() for ext in ext_list):
+                    print(f"⚠ No audio files found in {test_audio_dir}")
+            else:
+                print(f"⚠ Audio directory not found: {test_audio_dir}")
+            
+            # Add video files
             video_extensions = ['.mp4', '.mkv', '.avi', '.mov', '.m4v', '.webm', '.flv']
             if test_video_dir.exists():
-                # Get all video files from test_video_files directory
                 video_files = []
                 for ext in video_extensions:
                     video_files.extend(glob.glob(str(test_video_dir / f"*{ext}")))
                     video_files.extend(glob.glob(str(test_video_dir / f"*{ext.upper()}")))
                 
-                # Sort files for consistent testing order
                 video_files.sort()
                 
-                # Create a test scenario for each video file
                 for video_file in video_files:
                     video_path = Path(video_file)
-                    # Create a descriptive test name from the filename
+                    test_name = f"Video: {video_path.name}"
+                    test_scenarios.append((test_name, str(video_path)))
+                
+                if not video_files:
+                    print(f"⚠ No video files found in {test_video_dir}")
+            else:
+                print(f"⚠ Video directory not found: {test_video_dir}")
+                
+        elif args.format == 'video':
+            # For video format, test all files in test_video_files directory
+            video_extensions = ['.mp4', '.mkv', '.avi', '.mov', '.m4v', '.webm', '.flv']
+            if test_video_dir.exists():
+                video_files = []
+                for ext in video_extensions:
+                    video_files.extend(glob.glob(str(test_video_dir / f"*{ext}")))
+                    video_files.extend(glob.glob(str(test_video_dir / f"*{ext.upper()}")))
+                
+                video_files.sort()
+                
+                for video_file in video_files:
+                    video_path = Path(video_file)
                     test_name = f"Video: {video_path.name}"
                     test_scenarios.append((test_name, str(video_path)))
                 
@@ -653,7 +659,32 @@ def main():
             else:
                 print(f"⚠ Video directory not found: {test_video_dir}")
         else:
-            test_scenarios = all_test_scenarios.get(args.format, [])
+            # For specific audio formats (wav, aiff, mp3, other), test all files of that type
+            audio_format_extensions = {
+                'wav': ['.wav', '.WAV'],
+                'aiff': ['.aiff', '.AIFF'],
+                'mp3': ['.mp3', '.MP3'],
+                'other': ['.flac', '.FLAC', '.ogg', '.OGG', '.opus', '.OPUS', '.m4a', '.M4A', '.ac3', '.AC3', '.wma', '.WMA']
+            }
+            
+            if args.format in audio_format_extensions:
+                extensions = audio_format_extensions[args.format]
+                if test_audio_dir.exists():
+                    audio_files = []
+                    for ext in extensions:
+                        audio_files.extend(glob.glob(str(test_audio_dir / f"*{ext}")))
+                    
+                    audio_files.sort()
+                    
+                    for audio_file in audio_files:
+                        audio_path = Path(audio_file)
+                        test_name = f"{args.format.upper()}: {audio_path.name}"
+                        test_scenarios.append((test_name, str(audio_path)))
+                    
+                    if not test_scenarios:
+                        print(f"⚠ No {args.format} files found in {test_audio_dir}")
+                else:
+                    print(f"⚠ Audio directory not found: {test_audio_dir}")
     
     if not test_scenarios:
         print(f"✗ No test scenarios found for format: {args.format}")
@@ -671,18 +702,12 @@ def main():
         if args.file:
             # For single file test, pattern is already the file path
             audio_file = Path(pattern)
-        elif args.format == 'video':
-            # For video format, pattern is already the full file path (from test_video_files)
+        else:
+            # For all other cases, pattern is already the full file path
             audio_file = Path(pattern)
             if not audio_file.exists():
                 print(f"\n⚠ Skipping {test_name}: File not found: {audio_file}")
                 continue
-        else:
-            files = glob.glob(pattern)
-            if not files:
-                print(f"\n⚠ Skipping {test_name}: No matching files found")
-                continue
-            audio_file = Path(files[0])
         osc_port = base_port + port_counter
         
         # Run test with dynamic offset calculation from current MTC time
@@ -696,8 +721,9 @@ def main():
         results.append((test_name, success))
         port_counter += 1
         
-        # Brief pause between tests
-        time.sleep(1)
+        # Brief pause between tests to ensure ports are released
+        # UDP sockets can remain in TIME_WAIT state briefly after process closes
+        time.sleep(1.5)
     
     # Cleanup
     if mtc_receiver:
