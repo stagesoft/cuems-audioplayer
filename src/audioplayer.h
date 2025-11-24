@@ -35,8 +35,8 @@
 #ifndef XJADEO_ADJUSTMENT
 #define XJADEO_ADJUSTMENT 0
 #endif
-#ifndef MTC_FRAMES_TOLLERANCE
-#define MTC_FRAMES_TOLLERANCE 2
+#ifndef MTC_FRAMES_TOLERANCE
+#define MTC_FRAMES_TOLERANCE 2
 #endif
 
 #include <atomic>
@@ -103,7 +103,7 @@ class AudioPlayer : public OscReceiver
         static std::atomic <bool> endOfStream;                // Is the end of the stream reached already?
         static std::atomic <bool> endOfPlay;                  // Are we done playing and waiting?
         static std::atomic <bool> outOfFile;                  // Is our head out of our file boundaries?
-        long int endTimeStamp = 0;              // Our finish timestamp to calculate end wait
+        std::atomic<long int> endTimeStamp{0};  // Our finish timestamp to calculate end wait (atomic for thread safety)
         bool followingMtc;               // Is player following MTC?
 
         // Playing head vars and flags
@@ -114,9 +114,9 @@ class AudioPlayer : public OscReceiver
         std::atomic<int> playheadControl = 1;       // Head reading direction
 
         unsigned int headStep = 4;              // Head step per channel, FLOAT32 format, 4 bytes
-        long int headOffset = 0;                // Head offset
+        std::atomic<long int> headOffset{0};    // Head offset (atomic: read/written from multiple threads)
         std::atomic <bool> offsetChanged = false;             // Flag to recognise when the offset is OSC changed
-        long int headNewOffset = 0;             // Head offset to update through OSC
+        std::atomic<long int> headNewOffset{0}; // Head offset to update through OSC (atomic for safety)
 
         long int endWaitTime = 0;               // End time to wait before quitting
 

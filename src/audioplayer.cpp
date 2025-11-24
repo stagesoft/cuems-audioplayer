@@ -83,13 +83,13 @@ AudioPlayer::AudioPlayer(   int port,
 
     // Adjust initial offset
     //      NOTE: Hardcoded 50 ms offset while testing sync with Xjadeo
-    headOffset = (initOffset + XJADEO_ADJUSTMENT) * audioMillisecondSize;
+    headOffset.store((initOffset + XJADEO_ADJUSTMENT) * audioMillisecondSize);
     // Note: With FFmpeg, headers are handled internally - no manual offset needed
 
     // If we have a positive offset initialli we can already
     // seek the file to its proper initial position
-    if ( (playHead + headOffset) >= 0 )
-        audioFile.seekg( playHead + headOffset , ios_base::beg );
+    if ( (playHead + headOffset.load()) >= 0 )
+        audioFile.seekg( playHead + headOffset.load() , ios_base::beg );
 
     // Per channel volume param to process audio
     volumeMaster = new float[nChannels];
@@ -283,7 +283,7 @@ AudioPlayer::AudioPlayer(   int port,
             audioMillisecondSize = ( (float) sampleRate / 1000 ) * audioFrameSize;
             
             // Recalculate offset with correct sample rate
-            headOffset = (initOffset + XJADEO_ADJUSTMENT) * audioMillisecondSize;
+            headOffset.store((initOffset + XJADEO_ADJUSTMENT) * audioMillisecondSize);
             // Note: With FFmpeg, headers are handled internally - no manual offset needed
         }
         
@@ -419,26 +419,33 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
         // 1) after MTC: if there is MTC signal then we treat it
         if ( ap->mtcReceiver.isTimecodeRunning && ap->followingMtc && !ap->mtcSignalLost )
         {
-            // Tollerance 2 frames, due to the MTC 8 packages -> 2 frames relay
-            long int tollerance = MTC_FRAMES_TOLLERANCE * ( 1000 / (float) ap->mtcReceiver.curFrameRate ) * ap->audioMillisecondSize;
+            // Tolerance 2 frames, due to the MTC 8 packages -> 2 frames delay
+            // Validate frame rate to prevent division by zero
+            unsigned char frameRate = ap->mtcReceiver.curFrameRate.load();
+            if (frameRate == 0) {
+                frameRate = 25;  // Default to 25fps
+                CuemsLogger::getLogger()->logWarning("MTC frame rate invalid (0), defaulting to 25fps");
+            }
+            long int tolerance = MTC_FRAMES_TOLERANCE * ( 1000 / (float) frameRate ) * ap->audioMillisecondSize;
             
-            long int mtcHeadInBytes = ap->mtcReceiver.mtcHead * ap->audioMillisecondSize ;
+            // Use long long to prevent overflow for long files (multi-hour) with high sample rates
+            long long int mtcHeadInBytes = (long long int)ap->mtcReceiver.mtcHead.load() * ap->audioMillisecondSize;
 
-            long int difference = ap->playHead - mtcHeadInBytes;
+            long long int difference = ap->playHead - mtcHeadInBytes;
 
             // If our audio play head is too late or out of the boundaries of our mtc frame
-            // tollerance... We correct it. Also if the offset changed dinamically via OSC
-            if ( abs(difference) > tollerance || ap->offsetChanged ) {
+            // tolerance... We correct it. Also if the offset changed dynamically via OSC
+            if ( abs(difference) > tolerance || ap->offsetChanged ) {
                 // Set new OSC offset if any
                 if ( ap->offsetChanged ) {
-                    ap->headOffset = ap->headNewOffset;
+                    ap->headOffset.store(ap->headNewOffset.load());
                     // And reset flag
                     ap->offsetChanged = false;
                     // Note: Don't set outOfFile here - let the boundary check below determine that
                 }
 
                 // Calculate the actual seek position in the file (accounting for offset)
-                long long seekPosition = mtcHeadInBytes + ap->headOffset;
+                long long seekPosition = mtcHeadInBytes + ap->headOffset.load();
                 unsigned long long fileSize = ap->audioFile.getFileSize();
                 
                 if ( (seekPosition >= 0) && (seekPosition <= (long long)fileSize) ){
@@ -451,7 +458,7 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
                     // Seek to the calculated position
                     ap->audioFile.seekg( seekPosition , ios_base::beg );
                     // Update playHead to match where we actually are (without offset, as offset is separate)
-                    ap->playHead = seekPosition - ap->headOffset;
+                    ap->playHead = seekPosition - ap->headOffset.load();
                 }
                 else {
                     CuemsLogger::getLogger()->logInfo("Out of file boundaries!");
@@ -471,7 +478,7 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
             // Calculate total bytes to read for this buffer
             unsigned long int bytesToRead = nBufferFrames * ap->audioFrameSize;
             
-            if ( (ap->playHead + ap->headOffset) >= 0 ) {
+            if ( (ap->playHead + ap->headOffset.load()) >= 0 ) {
                 // Read entire buffer in ONE call - much more efficient for resampling!
                 ap->audioFile.read((char*) outputBuffer, bytesToRead);
                 count = ap->audioFile.gcount();
@@ -498,8 +505,6 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
             unsigned long int startByte = count * ap->audioFrameSize;
 
             memset( (char *)(outputBuffer) + startByte, 0, bytes );
-
-           // ap->outOfFile = true;
         }
 
         // If we did not read anything, we are out of boundaries, maybe...
@@ -514,9 +519,9 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
             }
             else {
                 // If we have waiting time set...
-                if ( ap->endTimeStamp == 0 ) {
+                if ( ap->endTimeStamp.load() == 0 ) {
                     // We note down our timestamp
-                    ap->endTimeStamp = chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count();
+                    ap->endTimeStamp.store(chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count());
 
                     std::string str;
                     if ( ap->endWaitTime == __LONG_MAX__ ) 
@@ -531,7 +536,7 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
 
                 long int timecodeNow = chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count();
                 
-                if ( ( timecodeNow - ap->endTimeStamp ) > ap->endWaitTime ) {
+                if ( ( timecodeNow - ap->endTimeStamp.load() ) > ap->endWaitTime ) {
                     CuemsLogger::getLogger()->logInfo("Waiting time exceded, ending audioplayer");
                     ap->endOfPlay = true;
                     return 1;
@@ -543,33 +548,17 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
         else {
             ap->endOfStream = false;
             ap->endOfPlay = false;
-            ap->endTimeStamp = 0;
+            ap->endTimeStamp.store(0);
             ap->outOfFile = false;
         }
     }
     // If we are not playing audio... Just copy silence...
     else
     {
-        // Check play control flags
-        // if we already started and we have no MTC signal, and it was 
-        // already lost, it is lost now
-        if (    !ap->mtcReceiver.isTimecodeRunning && 
-                ap->mtcSignalStarted && 
-                !ap->mtcSignalLost ) {
-            CuemsLogger::getLogger()->logInfo("MTC signal lost");
-            ap->mtcSignalLost = true;
-        }
-
+        // MTC signal lost detection is already handled in the main playing branch above (lines 418-422)
+        // No need to duplicate it here
         memset( (char *)(outputBuffer), 0, nBufferFrames * ap->audioFrameSize );
     }
-
-    // At the end, if we are following MTC but it is not running right now
-    // let's fix our head to MTC head now it's stopped
-    /*
-    if ( ! ap->mtcReceiver.isTimecodeRunning && ap->followingMtc ) {
-        ap->playHead = ap->mtcReceiver.mtcHead * ap->audioMillisecondSize;
-    }
-    */
 
     return 0;
 
@@ -617,7 +606,7 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
             // Offset argument in OSC command is in milliseconds
             // so we need to calculate in bytes in our file
 
-            headNewOffset = ( offsetOSC + XJADEO_ADJUSTMENT ) * audioMillisecondSize;             // To bytes
+            headNewOffset.store(( offsetOSC + XJADEO_ADJUSTMENT ) * audioMillisecondSize);  // To bytes
 
             // Note: With FFmpeg, headers are handled internally - no manual offset needed
 

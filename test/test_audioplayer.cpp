@@ -154,7 +154,7 @@ TEST_F(AudioPlayerTest, ConstantsDefined) {
         EXPECT_TRUE(false); // Should be defined
     #endif
     
-    #ifdef MTC_FRAMES_TOLLERANCE
+    #ifdef MTC_FRAMES_TOLERANCE
         EXPECT_TRUE(true);
     #else
         EXPECT_TRUE(false); // Should be defined
@@ -218,8 +218,8 @@ TEST_F(AudioPlayerTest, ConstantValues) {
     #endif
     
     // MTC_FRAMES_TOLLERANCE should be 2 (from header)
-    #ifdef MTC_FRAMES_TOLLERANCE
-        EXPECT_EQ(MTC_FRAMES_TOLLERANCE, 2);
+    #ifdef MTC_FRAMES_TOLERANCE
+        EXPECT_EQ(MTC_FRAMES_TOLERANCE, 2);
     #endif
 }
 
