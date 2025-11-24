@@ -1,3 +1,18 @@
+cuems-audioplayer (0.0.3-1) bookworm; urgency=medium
+
+  * Updated for Debian Bookworm
+  * Integrated cuems-mediadecoder submodule
+  * Added video file audio playback support
+  * Fixed MTC synchronization race conditions (atomic variables)
+  * Improved audio channel downmixing (only when necessary, like mpv)
+  * Fixed audio glitches with DTS multi-channel playback
+  * Added comprehensive test suite with Google Test
+  * Improved device selection and sample rate detection
+  * Added pw-jack compatibility for PipeWire users
+  * Updated copyright notices and mpv acknowledgment
+
+ -- Ion Reguera <ion@stagelab.coop>  Mon, 24 Nov 2025 20:11:58 +0100
+
 cuems-audioplayer (0.0.2-1) buster; urgency=medium
 
   * CMake working, first approach

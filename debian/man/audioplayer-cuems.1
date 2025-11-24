@@ -1,0 +1,56 @@
+.TH AUDIOPLAYER-CUEMS 1 "November 2025" "cuems-audioplayer" "User Commands"
+.SH NAME
+audioplayer-cuems \- MTC synchronized audio player
+.SH SYNOPSIS
+.B audioplayer-cuems
+[\fIOPTIONS\fR] [\fIFILE\fR]
+.SH DESCRIPTION
+\fBaudioplayer-cuems\fR is an audio player that synchronizes playback with
+MTC (MIDI Time Code) timecode. It is part of the cuems project for
+professional audio/video synchronization in live performance environments.
+.PP
+The player supports various audio formats (WAV, AIFF, MP3, FLAC, etc.)
+and can extract audio from video files. It uses JACK for low-latency
+audio output.
+.SH OPTIONS
+.TP
+\fB-f\fR, \fB--file\fR \fIFILE\fR
+Specify the audio file to play. Can also be specified as a positional argument.
+.TP
+\fB-p\fR, \fB--port\fR \fIPORT\fR
+OSC port number (default: 7000).
+.TP
+\fB-o\fR, \fB--offset\fR \fIOFFSET\fR
+Initial offset in milliseconds.
+.TP
+\fB-w\fR, \fB--wait\fR \fITIME\fR
+Wait time in milliseconds after playback ends before exiting.
+.TP
+\fB-u\fR, \fB--uuid\fR \fIUUID\fR
+Player UUID for identification.
+.TP
+\fB-d\fR, \fB--device\fR \fIDEVICE\fR
+Audio device name.
+.TP
+\fB-m\fR, \fB--mtcfollow\fR
+Enable MTC following mode.
+.TP
+\fB-r\fR, \fB--resample-quality\fR \fIQUALITY\fR
+Resampling quality: \fBvhq\fR (very high), \fBhq\fR (high, default), \fBmq\fR (medium), \fBlq\fR (low).
+.TP
+\fB-c\fR, \fB--ciml\fR
+Continue if MTC is lost (don't stop on MTC signal loss).
+.TP
+\fB--show\fR \fIOPTION\fR
+Show information: \fBc\fR (copyright), \fBw\fR (warranty), \fBh\fR (help).
+.SH REQUIREMENTS
+JACK audio server must be running, or PipeWire with JACK compatibility layer.
+.SH SEE ALSO
+.BR jackd (1),
+.BR pw-jack (1)
+.SH AUTHOR
+Written by Alex Ramos and Ion Reguera for Stage Lab Coop.
+.SH COPYRIGHT
+Copyright \(co 2020 Stage Lab Coop.
+.br
+This is free software; see the source for copying conditions.

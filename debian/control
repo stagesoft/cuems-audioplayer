@@ -1,8 +1,8 @@
 Source: cuems-audioplayer
-Section: Sound
+Section: sound
 Priority: optional
-Maintainer: Ion Reguera <ion@stagelab.net>
-Build-Depends: cmake (>=3.17~), debhelper (>=11~), librtaudio-dev, librtmidi-dev, jackd2, liboscpack-dev
+Maintainer: Ion Reguera <ion@stagelab.coop>
+Build-Depends: cmake (>=3.17~), debhelper (>=11~), librtaudio-dev, librtmidi-dev, jackd2, liboscpack-dev, libsoxr-dev, pkg-config, libavformat-dev, libavcodec-dev, libavutil-dev, libswresample-dev
 Standards-Version: 4.1.4
 Homepage: https://github.com/stagesoft/stagesoft-project
 Vcs-Git: https://github.com/stagesoft/cuems-audioplayer.git
@@ -12,6 +12,7 @@ Package: cuems-audioplayer
 Architecture: any
 Multi-Arch: foreign
 Depends: ${misc:Depends}, ${shlibs:Depends}, jackd2
-Description: MTC syncronized audio player
- This is a audio player than can play in sync with mtc timecode
- and a is a part of the cuems project
+Description: MTC synchronized audio player
+ This is an audio player that can play in sync with MTC timecode
+ and is part of the cuems project. It supports various audio formats
+ including WAV, AIFF, MP3, FLAC, and can extract audio from video files.

@@ -7,6 +7,28 @@ export DEB_LDFLAGS_MAINT_APPEND = -Wl,--as-needed
 %:
 	dh $@  
 
+override_dh_auto_configure:
+	# Initialize git submodules if .git exists (development builds)
+	@if [ -d .git ]; then \
+		echo "Initializing git submodules..."; \
+		git submodule update --init --recursive || true; \
+	fi
+	# Verify submodules are present (required for build)
+	@if [ ! -f src/cuems-mediadecoder/CMakeLists.txt ] || \
+	   [ ! -f src/mtcreceiver/mtcreceiver.h ] || \
+	   [ ! -f src/oscreceiver/oscreceiver.h ] || \
+	   [ ! -f src/cuemslogger/cuemslogger.h ]; then \
+		echo "ERROR: Required submodules are missing!"; \
+		echo "Please run: git submodule update --init --recursive"; \
+		echo "Or ensure submodules are included when creating the source package."; \
+		exit 1; \
+	fi
+	# Disable tests for Debian package build (tests require googletest)
+	dh_auto_configure -- -DBUILD_TESTS=OFF
+
 override_dh_auto_install:
 	dh_auto_install -- prefix=/usr
+	# Install man page
+	install -d debian/cuems-audioplayer/usr/share/man/man1
+	install -m 644 debian/man/audioplayer-cuems.1 debian/cuems-audioplayer/usr/share/man/man1/
 
