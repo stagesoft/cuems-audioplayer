@@ -3,7 +3,11 @@
     audioplayer for linux based using RtAudio and RtMidi libraries to
     process audio and receive MTC sync. It also uses oscpack to receive
     some configurations through osc commands.
-    Copyright (C) 2020  Stage Lab & bTactic.
+    Copyright (C) 2020  Stage Lab Coop.
+
+    Authors:
+        Alex Ramos <alex@stagelab.coop>
+        Ion Reguera <ion@stagelab.coop>
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -348,7 +352,7 @@ int main( int argc, char *argv[] ) {
 void showcopyright( void ) {
     std::cout << "audioplayer-cuems v. " << 
         cuems_audioplayer_VERSION_MAJOR << "." << cuems_audioplayer_VERSION_MINOR <<
-        " - Copyright (C) 2020 Stage Lab & bTactic" << endl <<
+        " - Copyright (C) 2020 Stage Lab Coop" << endl <<
         "This program comes with ABSOLUTELY NO WARRANTY; for details type `show w'." << endl <<
         "This is free software, and you are welcome to redistribute it" << endl <<
         "under certain conditions; type `show c' for details." << endl << endl;
