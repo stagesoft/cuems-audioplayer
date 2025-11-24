@@ -40,8 +40,6 @@ AudioFstream::AudioFstream( const string filename,
                             ios_base::openmode openmode ) 
 {
     // Initialize FFmpeg members
-    formatContext = nullptr;
-    codecContext = nullptr;
     packet = nullptr;
     frame = nullptr;
     swrContext = nullptr;
@@ -106,91 +104,42 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
 {
     close();  // Close any existing file
     
-    // Open input file
-    formatContext = nullptr;
-    int ret = avformat_open_input(&formatContext, path.c_str(), nullptr, nullptr);
-    if (ret < 0) {
+    // Open using MediaFileReader
+    if (!fileReader.open(path)) {
         std::cerr << "Unable to find or open file: " << path << endl;
-        std::cerr << "FFmpeg error: " << getFFmpegError(ret) << endl;
-        CuemsLogger::getLogger()->logError("Couldn't open file: " + path + " - " + getFFmpegError(ret));
+        CuemsLogger::getLogger()->logError("Couldn't open file: " + path);
         errorState = true;
         fileOpen = false;
         return;
     }
     
-    // Retrieve stream information
-    ret = avformat_find_stream_info(formatContext, nullptr);
-    if (ret < 0) {
-        std::cerr << "Could not find stream information: " << getFFmpegError(ret) << endl;
-        CuemsLogger::getLogger()->logError("Could not find stream information: " + getFFmpegError(ret));
-        avformat_close_input(&formatContext);
-        errorState = true;
-        fileOpen = false;
-        return;
-    }
-    
-    // Find the first audio stream
-    audioStreamIndex = -1;
-    for (unsigned int i = 0; i < formatContext->nb_streams; i++) {
-        if (formatContext->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
-            audioStreamIndex = i;
-            break;
-        }
-    }
-    
-    if (audioStreamIndex == -1) {
+    // Find audio stream
+    audioStreamIndex = fileReader.findStream(AVMEDIA_TYPE_AUDIO);
+    if (audioStreamIndex < 0) {
         std::cerr << "Could not find audio stream in file" << endl;
         CuemsLogger::getLogger()->logError("No audio stream found in file");
-        avformat_close_input(&formatContext);
+        fileReader.close();
         errorState = true;
         fileOpen = false;
         return;
     }
     
     // Get codec parameters
-    AVCodecParameters* codecParams = formatContext->streams[audioStreamIndex]->codecpar;
-    
-    // Find decoder
-    const AVCodec* codec = avcodec_find_decoder(codecParams->codec_id);
-    if (!codec) {
-        std::cerr << "Unsupported codec!" << endl;
-        CuemsLogger::getLogger()->logError("Unsupported codec ID: " + std::to_string(codecParams->codec_id));
-        avformat_close_input(&formatContext);
+    AVCodecParameters* codecParams = fileReader.getCodecParameters(audioStreamIndex);
+    if (!codecParams) {
+        std::cerr << "Failed to get codec parameters" << endl;
+        CuemsLogger::getLogger()->logError("Failed to get codec parameters");
+        fileReader.close();
         errorState = true;
         fileOpen = false;
         return;
     }
     
-    // Allocate codec context
-    codecContext = avcodec_alloc_context3(codec);
-    if (!codecContext) {
-        std::cerr << "Failed to allocate codec context" << endl;
-        CuemsLogger::getLogger()->logError("Failed to allocate codec context");
-        avformat_close_input(&formatContext);
-        errorState = true;
-        fileOpen = false;
-        return;
-    }
-    
-    // Copy codec parameters to codec context
-    ret = avcodec_parameters_to_context(codecContext, codecParams);
-    if (ret < 0) {
-        std::cerr << "Failed to copy codec parameters: " << getFFmpegError(ret) << endl;
-        CuemsLogger::getLogger()->logError("Failed to copy codec parameters: " + getFFmpegError(ret));
-        avcodec_free_context(&codecContext);
-        avformat_close_input(&formatContext);
-        errorState = true;
-        fileOpen = false;
-        return;
-    }
-    
-    // Open codec
-    ret = avcodec_open2(codecContext, codec, nullptr);
-    if (ret < 0) {
-        std::cerr << "Failed to open codec: " << getFFmpegError(ret) << endl;
-        CuemsLogger::getLogger()->logError("Failed to open codec: " + getFFmpegError(ret));
-        avcodec_free_context(&codecContext);
-        avformat_close_input(&formatContext);
+    // Open audio decoder
+    if (!audioDecoder.openCodec(codecParams)) {
+        std::cerr << "Failed to open audio codec" << endl;
+        CuemsLogger::getLogger()->logError("Failed to open audio codec");
+        fileReader.close();
         errorState = true;
         fileOpen = false;
         return;
@@ -208,11 +157,25 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
         return;
     }
     
-    // Extract audio properties
-    fileChannels = codecContext->ch_layout.nb_channels;
-    fileSampleRate = codecContext->sample_rate;
+    // Extract audio properties from decoder
+    AVSampleFormat sampleFmt;
+    int channels, sampleRate;
+    if (!audioDecoder.getAudioProperties(channels, sampleRate, sampleFmt)) {
+        std::cerr << "Failed to get audio properties" << endl;
+        CuemsLogger::getLogger()->logError("Failed to get audio properties");
+        cleanupFFmpeg();
+        errorState = true;
+        fileOpen = false;
+        return;
+    }
+    fileChannels = (unsigned int)channels;
+    fileSampleRate = (unsigned int)sampleRate;
+    
+    // Get codec context for additional info
+    AVCodecContext* codecContext = audioDecoder.getCodecContext();
     
     // Calculate total samples from duration
+    AVFormatContext* formatContext = fileReader.getFormatContext();
     AVStream* audioStream = formatContext->streams[audioStreamIndex];
     if (audioStream->duration != AV_NOPTS_VALUE) {
         totalSamples = av_rescale_q(audioStream->duration, audioStream->time_base, 
@@ -231,7 +194,7 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
     // (FFmpeg decodes to various formats, we need float for libsoxr)
     AVChannelLayout out_ch_layout = codecContext->ch_layout;
     
-    ret = swr_alloc_set_opts2(&swrContext,
+    int ret = swr_alloc_set_opts2(&swrContext,
                               &out_ch_layout, AV_SAMPLE_FMT_FLT, fileSampleRate,
                               &codecContext->ch_layout, codecContext->sample_fmt, codecContext->sample_rate,
                               0, nullptr);
@@ -267,10 +230,9 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
     currentSamplePos = 0;
     
     CuemsLogger::getLogger()->logOK("File open OK! : " + path);
-    CuemsLogger::getLogger()->logOK("Audio codec: " + string(codec->long_name));
     CuemsLogger::getLogger()->logOK("Sample rate: " + std::to_string(fileSampleRate) + " Hz");
     CuemsLogger::getLogger()->logOK("Channels: " + std::to_string(fileChannels));
-    CuemsLogger::getLogger()->logOK("Format: " + string(av_get_sample_fmt_name(codecContext->sample_fmt)));
+    CuemsLogger::getLogger()->logOK("Format: " + string(av_get_sample_fmt_name(sampleFmt)));
     if (totalSamples > 0) {
         CuemsLogger::getLogger()->logOK("Duration: " + std::to_string(totalSamples / (double)fileSampleRate) + " seconds");
     }
@@ -299,14 +261,14 @@ bool AudioFstream::decodeNextFrame()
     }
     
     while (true) {
-        // Read packet
-        int ret = av_read_frame(formatContext, packet);
+        // Read packet from MediaFileReader
+        int ret = fileReader.readPacket(packet);
         
         if (ret < 0) {
             if (ret == AVERROR_EOF) {
                 eofReached = true;
                 // Flush decoder
-                avcodec_send_packet(codecContext, nullptr);
+                audioDecoder.sendPacket(nullptr);
             } else {
                 std::cerr << "Error reading frame: " << getFFmpegError(ret) << endl;
                 errorState = true;
@@ -322,7 +284,7 @@ bool AudioFstream::decodeNextFrame()
         
         // Send packet to decoder
         if (ret >= 0) {
-            ret = avcodec_send_packet(codecContext, packet);
+            ret = audioDecoder.sendPacket(packet);
             av_packet_unref(packet);
             
             if (ret < 0) {
@@ -333,7 +295,7 @@ bool AudioFstream::decodeNextFrame()
         }
         
         // Receive decoded frame
-        ret = avcodec_receive_frame(codecContext, frame);
+        ret = audioDecoder.receiveFrame(frame);
         
         if (ret == AVERROR(EAGAIN)) {
             // Need more packets
@@ -502,7 +464,7 @@ void AudioFstream::read(char* buffer, size_t bytes)
 ////////////////////////////////////////////
 void AudioFstream::seekg(long long pos, ios_base::seekdir dir)
 {
-    if (!fileOpen || !formatContext) {
+    if (!fileOpen || !fileReader.isReady()) {
         return;
     }
     
@@ -527,23 +489,19 @@ void AudioFstream::seekg(long long pos, ios_base::seekdir dir)
         fileSamplePos = (int64_t)((double)targetSamplePos * fileSampleRate / targetSampleRate);
     }
     
-    // Convert to timestamp
-    int64_t targetTimestamp = av_rescale_q(fileSamplePos / fileChannels, 
-                                          (AVRational){1, (int)fileSampleRate},
-                                          formatContext->streams[audioStreamIndex]->time_base);
+    // Convert to time in seconds
+    double timeSeconds = (double)(fileSamplePos / fileChannels) / fileSampleRate;
     
-    // Seek
-    int ret = av_seek_frame(formatContext, audioStreamIndex, targetTimestamp, AVSEEK_FLAG_BACKWARD);
-    
-    if (ret < 0) {
-        std::cerr << "Seek error: " << getFFmpegError(ret) << endl;
-        CuemsLogger::getLogger()->logError("Seek error: " + getFFmpegError(ret));
+    // Seek using MediaFileReader
+    if (!fileReader.seekToTime(timeSeconds, audioStreamIndex, AVSEEK_FLAG_BACKWARD)) {
+        std::cerr << "Seek error" << endl;
+        CuemsLogger::getLogger()->logError("Seek error");
         errorState = true;
         return;
     }
     
-    // Flush codec buffers
-    avcodec_flush_buffers(codecContext);
+    // Flush decoder buffers
+    audioDecoder.flush();
     
     // Reset conversion buffer
     conversionBufferUsed = 0;
@@ -608,12 +566,6 @@ void AudioFstream::cleanupFFmpeg()
     if (packet) {
         av_packet_free(&packet);
     }
-    if (codecContext) {
-        avcodec_free_context(&codecContext);
-    }
-    if (formatContext) {
-        avformat_close_input(&formatContext);
-    }
     if (swrContext) {
         swr_free(&swrContext);
     }
@@ -621,6 +573,10 @@ void AudioFstream::cleanupFFmpeg()
         delete[] conversionBuffer;
         conversionBuffer = nullptr;
     }
+    
+    // Close cuems-mediadecoder components
+    audioDecoder.close();
+    fileReader.close();
     
     audioStreamIndex = -1;
     conversionBufferSize = 0;

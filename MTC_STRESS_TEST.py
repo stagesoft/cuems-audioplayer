@@ -156,7 +156,7 @@ def find_player_binary():
     
     return None
 
-def run_stress_test(test_name, audio_file, player_binary, osc_port, mtc_sender, mtc_receiver):
+def run_stress_test(test_name, audio_file, player_binary, osc_port, mtc_sender, mtc_receiver, use_pw_jack=False):
     """Run a stress test with seek operations"""
     print(f"\n{'='*80}")
     print(f"STRESS TEST: {test_name}")
@@ -180,8 +180,14 @@ def run_stress_test(test_name, audio_file, player_binary, osc_port, mtc_sender, 
     
     # Start player WITHOUT MTC following
     print(f"\n[1/7] Starting player WITHOUT MTC following...")
+    player_cmd = [str(player_binary), '-f', str(audio_file), '-p', str(osc_port), '-o', '0']
+    
+    # Wrap with pw-jack if needed
+    if use_pw_jack:
+        player_cmd = ['pw-jack'] + player_cmd
+    
     player_process = subprocess.Popen(
-        [str(player_binary), '-f', str(audio_file), '-p', str(osc_port), '-o', '0'],
+        player_cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True
@@ -364,12 +370,48 @@ def main():
     print(f"Test results will be logged to: {log_file.absolute()}")
     
     # Check JACK
-    try:
-        subprocess.run(['jack_lsp'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print("✓ JACK is running")
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print("✗ JACK is not running. Please start JACK first.")
+    def check_jack_running():
+        """Check if JACK is running, or if pw-jack is available as fallback
+        
+        Returns:
+            tuple: (is_jack_available, use_pw_jack, warning_message)
+        """
+        # First check if JACK daemon is running
+        try:
+            result = subprocess.run(['pgrep', 'jackd'], capture_output=True, text=True)
+            if result.returncode == 0:
+                return (True, False, None)
+        except:
+            pass
+        
+        # JACK not running, check if pw-jack is available
+        try:
+            result = subprocess.run(['which', 'pw-jack'], capture_output=True, text=True)
+            if result.returncode == 0:
+                # Also check if PipeWire is running
+                try:
+                    subprocess.run(['pw-cli', 'info'], capture_output=True, check=True, timeout=1)
+                    return (False, True, "⚠ Warning: JACK daemon not running, using pw-jack (PipeWire JACK compatibility layer)")
+                except:
+                    return (False, True, "⚠ Warning: JACK daemon not running, pw-jack found but PipeWire may not be running")
+        except:
+            pass
+        
+        # Neither JACK nor pw-jack available
+        return (False, False, None)
+    
+    jack_available, use_pw_jack, warning_msg = check_jack_running()
+    if not jack_available and not use_pw_jack:
+        print("✗ JACK is not running and pw-jack is not available.")
+        print("  Please start JACK: jackd -d alsa -r 44100")
+        print("  Or install PipeWire with JACK support for pw-jack fallback")
         sys.exit(1)
+    
+    if jack_available:
+        print("✓ JACK is running")
+    elif use_pw_jack:
+        print(warning_msg)
+        print("✓ Using pw-jack as fallback")
     
     # Find player binary
     player_binary = find_player_binary()
@@ -435,7 +477,7 @@ def main():
             continue
         
         osc_port = base_port + i
-        success = run_stress_test(test_name, audio_path, player_binary, osc_port, mtc_sender, mtc_receiver)
+        success = run_stress_test(test_name, audio_path, player_binary, osc_port, mtc_sender, mtc_receiver, use_pw_jack)
         results.append((test_name, success))
         
         # Small delay between tests

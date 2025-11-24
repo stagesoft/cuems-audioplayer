@@ -4,8 +4,8 @@ Cuems system audio player.
 
     Still under development.
 
-Audio player for the Cuems stage system using RtAudio and RtMidi libraries for audio and midi porposes and oscpack for OSC communication.
-It works with raw RIFF/WAV formatted audio files (16 bits 44 KHz).
+Audio player for the Cuems stage system using RtAudio and RtMidi libraries for audio and midi purposes and oscpack for OSC communication.
+It supports various audio formats (WAV, MP3, AAC, FLAC, OGG, etc.) and can extract and play audio from video files (MP4, AVI, MKV, MOV, etc.) via the cuems-mediadecoder module (FFmpeg-based).
 
 ## Requirements
 
@@ -17,9 +17,17 @@ It works with raw RIFF/WAV formatted audio files (16 bits 44 KHz).
 
 - OSCPack : liboscpack-dev v. 1.1.0
 
+- FFmpeg libraries : libavformat, libavcodec, libavutil, libswresample (provided via cuems-mediadecoder)
+
+- libsoxr : libsoxr-dev (for audio resampling)
+
 ## Build instructions
 
-Run:
+First, initialize git submodules (includes cuems-mediadecoder):
+
+    git submodule update --init --recursive
+
+Then run:
 
     cmake -S src/ -B build/
 
@@ -39,10 +47,12 @@ to get the _Debug_ configuration. And then:
     This is free software, and you are welcome to redistribute it
     under certain conditions; type `show c' for details.
 
-    Usage :    audioplayer-cuems --port <osc_port> [other options] <wav_file_path>
+    Usage :    audioplayer-cuems --port <osc_port> [other options] <media_file_path>
 
            COMPULSORY OPTIONS:
-           --file , -f <file_path> : wav file to read audio data from.
+           --file , -f <file_path> : media file to read audio data from.
+               Supports audio files (WAV, MP3, AAC, FLAC, OGG, etc.) and video files (MP4, AVI, MKV, MOV, etc.).
+               For video files, the audio track will be extracted and played.
                File name can also be stated as the last argument with no option indicator.
 
            --port , -p <port_number> : OSC port to listen to.

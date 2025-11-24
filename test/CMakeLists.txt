@@ -22,9 +22,6 @@ endif()
 
 # Find required packages for tests
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(AVFORMAT REQUIRED libavformat)
-pkg_check_modules(AVCODEC REQUIRED libavcodec)
-pkg_check_modules(AVUTIL REQUIRED libavutil)
 pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
 pkg_check_modules(SOXR REQUIRED soxr)
 
@@ -52,6 +49,7 @@ target_link_libraries(audioplayer_tests PRIVATE
 # Link project libraries
 # Note: These are built in src/CMakeLists.txt subdirectories
 target_link_libraries(audioplayer_tests PRIVATE
+    cuems-mediadecoder
     cuemslogger
     mtcreceiver
     oscreceiver
@@ -59,9 +57,6 @@ target_link_libraries(audioplayer_tests PRIVATE
     rtmidi
     pthread
     stdc++fs
-    ${AVFORMAT_LIBRARIES}
-    ${AVCODEC_LIBRARIES}
-    ${AVUTIL_LIBRARIES}
     ${SWRESAMPLE_LIBRARIES}
     ${SOXR_LIBRARIES}
 )
@@ -74,9 +69,6 @@ target_include_directories(audioplayer_tests PRIVATE
     "${CMAKE_SOURCE_DIR}/src/oscreceiver"
     "${CMAKE_SOURCE_DIR}/src/cuemslogger"
     "${CMAKE_BINARY_DIR}/src"  # For generated config header
-    ${AVFORMAT_INCLUDE_DIRS}
-    ${AVCODEC_INCLUDE_DIRS}
-    ${AVUTIL_INCLUDE_DIRS}
     ${SWRESAMPLE_INCLUDE_DIRS}
     ${SOXR_INCLUDE_DIRS}
 )

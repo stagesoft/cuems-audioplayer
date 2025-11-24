@@ -47,3 +47,4 @@ if [ "$1" == "--direct" ]; then
     ./test/audioplayer_tests
 fi
 
+

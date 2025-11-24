@@ -12,13 +12,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 # Find required packages
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(AVFORMAT REQUIRED libavformat)
-pkg_check_modules(AVCODEC REQUIRED libavcodec)
-pkg_check_modules(AVUTIL REQUIRED libavutil)
-pkg_check_modules(SWRESAMPLE REQUIRED libswresample)
 pkg_check_modules(SOXR REQUIRED soxr)
 
 # Subdirectories
+add_subdirectory(cuems-mediadecoder)
 add_subdirectory(oscreceiver)
 add_subdirectory(mtcreceiver)
 add_subdirectory(cuemslogger)
@@ -31,9 +28,9 @@ set_target_properties(audioplayer-cuems PROPERTIES DEBUG_POSTFIX ${CMAKE_DEBUG_P
 configure_file(cuems_audioplayerConfig.h.in cuems_audioplayerConfig.h)
 
 # Link libraries
-target_link_libraries(audioplayer-cuems PUBLIC cuemslogger mtcreceiver oscreceiver)
+target_link_libraries(audioplayer-cuems PUBLIC cuems-mediadecoder cuemslogger mtcreceiver oscreceiver)
 target_link_libraries(audioplayer-cuems PUBLIC rtaudio rtmidi pthread stdc++fs)
-target_link_libraries(audioplayer-cuems PUBLIC ${AVFORMAT_LIBRARIES} ${AVCODEC_LIBRARIES} ${AVUTIL_LIBRARIES} ${SWRESAMPLE_LIBRARIES} ${SOXR_LIBRARIES})
+target_link_libraries(audioplayer-cuems PUBLIC ${SOXR_LIBRARIES})
 
 # Include dirs
 target_include_directories(audioplayer-cuems PUBLIC
@@ -42,10 +39,6 @@ target_include_directories(audioplayer-cuems PUBLIC
                             "${PROJECT_SOURCE_DIR}/mtcreceiver"
                             "${PROJECT_SOURCE_DIR}/oscreceiver"
                             "${PROJECT_SOURCE_DIR}/cuemslogger"
-                            ${AVFORMAT_INCLUDE_DIRS}
-                            ${AVCODEC_INCLUDE_DIRS}
-                            ${AVUTIL_INCLUDE_DIRS}
-                            ${SWRESAMPLE_INCLUDE_DIRS}
                             ${SOXR_INCLUDE_DIRS}
                         )
 # Install rules

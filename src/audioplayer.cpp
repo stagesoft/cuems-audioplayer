@@ -104,7 +104,7 @@ AudioPlayer::AudioPlayer(   int port,
     //////////////////////////////////////////////////////////
     // Setting our audio stream parameters
     // Check for audio devices
-    int audioDeviceId = 0;
+    int audioDeviceId = -1;
     try {
         int deviceCount = audio.getDeviceCount();
         if ( deviceCount == 0 ) {
@@ -122,17 +122,94 @@ AudioPlayer::AudioPlayer(   int port,
             exit( CUEMS_EXIT_AUDIO_DEVICE_ERR );
         }
         else {
+            // Helper function to check if a device is suitable
+            auto isDeviceSuitable = [&](int deviceId) -> bool {
+                try {
+                    RtAudio::DeviceInfo info = audio.getDeviceInfo(deviceId);
+                    // Check if device is probed successfully and has enough output channels
+                    return info.probed && 
+                           info.outputChannels >= nChannels;
+                } catch (...) {
+                    return false;
+                }
+            };
+
+            // First, try to find device by name (if specified)
             bool found = false;
-            for(audioDeviceId = 0; audioDeviceId < deviceCount; ++audioDeviceId) {
-                RtAudio::DeviceInfo info = audio.getDeviceInfo(audioDeviceId);
-                if (info.name == deviceName) {
-                    found = true;
-                    break;
+            if (!deviceName.empty()) {
+                for(int i = 0; i < deviceCount; ++i) {
+                    try {
+                        RtAudio::DeviceInfo info = audio.getDeviceInfo(i);
+                        if (info.name == deviceName && isDeviceSuitable(i)) {
+                            audioDeviceId = i;
+                            found = true;
+                            CuemsLogger::getLogger()->logInfo("Found specified device: " + deviceName);
+                            break;
+                        }
+                    } catch (...) {
+                        // Skip devices that fail to probe
+                        continue;
+                    }
                 }
             }
 
+            // If device name not found or not suitable, find any suitable output device
             if (!found) {
-                audioDeviceId = audio.getDefaultOutputDevice();
+                // Try default output device first
+                int defaultDevice = audio.getDefaultOutputDevice();
+                if (defaultDevice >= 0 && defaultDevice < deviceCount && isDeviceSuitable(defaultDevice)) {
+                    audioDeviceId = defaultDevice;
+                    found = true;
+                    CuemsLogger::getLogger()->logInfo("Using default output device");
+                } else {
+                    // Iterate through all devices to find a suitable one
+                    for(int i = 0; i < deviceCount; ++i) {
+                        if (isDeviceSuitable(i)) {
+                            audioDeviceId = i;
+                            found = true;
+                            try {
+                                RtAudio::DeviceInfo info = audio.getDeviceInfo(i);
+                                CuemsLogger::getLogger()->logInfo("Using device: " + info.name + 
+                                    " (" + std::to_string(info.outputChannels) + " output channels)");
+                            } catch (...) {
+                                CuemsLogger::getLogger()->logInfo("Using device ID: " + std::to_string(i));
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // If still no suitable device found, provide detailed error
+            if (!found || audioDeviceId < 0) {
+                std::string str = "No suitable audio output device found. ";
+                str += "Required: " + std::to_string(nChannels) + " output channels. ";
+                str += "Available devices:";
+                
+                std::cerr << str << endl;
+                CuemsLogger::getLogger()->logError(str);
+                
+                // List available devices for debugging
+                for(int i = 0; i < deviceCount; ++i) {
+                    try {
+                        RtAudio::DeviceInfo info = audio.getDeviceInfo(i);
+                        std::string deviceStr = "  Device " + std::to_string(i) + ": " + info.name;
+                        deviceStr += " (probed: " + std::string(info.probed ? "yes" : "no");
+                        deviceStr += ", output channels: " + std::to_string(info.outputChannels) + ")";
+                        std::cerr << deviceStr << endl;
+                        CuemsLogger::getLogger()->logError(deviceStr);
+                    } catch (...) {
+                        std::string deviceStr = "  Device " + std::to_string(i) + ": (failed to probe)";
+                        std::cerr << deviceStr << endl;
+                        CuemsLogger::getLogger()->logError(deviceStr);
+                    }
+                }
+
+                str = "Maybe JACK NOT RUNNING or no suitable output device available!";
+                std::cerr << str << endl;
+                CuemsLogger::getLogger()->logError(str);
+
+                exit( CUEMS_EXIT_AUDIO_DEVICE_ERR );
             }
         }
     }

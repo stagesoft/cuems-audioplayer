@@ -36,9 +36,11 @@
 #include <string>
 #include <soxr.h>
 
+#include "cuems_mediadecoder/MediaFileReader.h"
+#include "cuems_mediadecoder/AudioDecoder.h"
+#include "cuems_mediadecoder/FFmpegUtils.h"
+
 extern "C" {
-#include <libavformat/avformat.h>
-#include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
 #include <libswresample/swresample.h>
 }
@@ -78,9 +80,9 @@ class AudioFstream
         unsigned int getBitsPerSample() const;
 
     private:
-        // FFmpeg members
-        AVFormatContext* formatContext;
-        AVCodecContext* codecContext;
+        // cuems-mediadecoder members
+        cuems_mediadecoder::MediaFileReader fileReader;
+        cuems_mediadecoder::AudioDecoder audioDecoder;
         AVPacket* packet;
         AVFrame* frame;
         SwrContext* swrContext;

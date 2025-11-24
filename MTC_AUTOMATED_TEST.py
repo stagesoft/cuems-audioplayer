@@ -181,12 +181,34 @@ def send_osc_message(host, port, address, *args):
         return False
 
 def check_jack_running():
-    """Check if JACK is running"""
+    """Check if JACK is running, or if pw-jack is available as fallback
+    
+    Returns:
+        tuple: (is_jack_available, use_pw_jack, warning_message)
+    """
+    # First check if JACK daemon is running
     try:
         result = subprocess.run(['pgrep', 'jackd'], capture_output=True, text=True)
-        return result.returncode == 0
+        if result.returncode == 0:
+            return (True, False, None)
     except:
-        return False
+        pass
+    
+    # JACK not running, check if pw-jack is available
+    try:
+        result = subprocess.run(['which', 'pw-jack'], capture_output=True, text=True)
+        if result.returncode == 0:
+            # Also check if PipeWire is running
+            try:
+                subprocess.run(['pw-cli', 'info'], capture_output=True, check=True, timeout=1)
+                return (False, True, "⚠ Warning: JACK daemon not running, using pw-jack (PipeWire JACK compatibility layer)")
+            except:
+                return (False, True, "⚠ Warning: JACK daemon not running, pw-jack found but PipeWire may not be running")
+    except:
+        pass
+    
+    # Neither JACK nor pw-jack available
+    return (False, False, None)
 
 def find_player_binary():
     """Find the audioplayer-cuems binary"""
@@ -203,7 +225,7 @@ def find_player_binary():
     
     return None
 
-def run_test(test_name, audio_file, player_binary, osc_port, mtc_sender, mtc_receiver, port_base=7000):
+def run_test(test_name, audio_file, player_binary, osc_port, mtc_sender, mtc_receiver, port_base=7000, use_pw_jack=False):
     """Run a single test scenario
     
     Args:
@@ -214,6 +236,7 @@ def run_test(test_name, audio_file, player_binary, osc_port, mtc_sender, mtc_rec
         mtc_sender: MtcSender instance (MTC timecode should already be running)
         mtc_receiver: MtcReceiver instance (to get current MTC time)
         port_base: Base port number
+        use_pw_jack: If True, wrap player command with pw-jack
     """
     print(f"\n{'='*80}")
     print(f"TEST: {test_name}")
@@ -248,6 +271,10 @@ def run_test(test_name, audio_file, player_binary, osc_port, mtc_sender, mtc_rec
         '-o', str(offset_ms),  # Offset in milliseconds (calculated from current MTC time)
         # NO -m flag - MTC following disabled initially
     ]
+    
+    # Wrap with pw-jack if needed
+    if use_pw_jack:
+        player_cmd = ['pw-jack'] + player_cmd
     
     print(f"Command: {' '.join(player_cmd)}")
     
@@ -449,11 +476,18 @@ def main():
     print("="*80)
     
     # Check prerequisites
-    if not check_jack_running():
-        print("✗ JACK is not running. Please start JACK first:")
-        print("  jackd -d alsa -r 44100")
+    jack_available, use_pw_jack, warning_msg = check_jack_running()
+    if not jack_available and not use_pw_jack:
+        print("✗ JACK is not running and pw-jack is not available.")
+        print("  Please start JACK: jackd -d alsa -r 44100")
+        print("  Or install PipeWire with JACK support for pw-jack fallback")
         sys.exit(1)
-    print("✓ JACK is running")
+    
+    if jack_available:
+        print("✓ JACK is running")
+    elif use_pw_jack:
+        print(warning_msg)
+        print("✓ Using pw-jack as fallback")
     
     player_binary = find_player_binary()
     if not player_binary:
@@ -577,11 +611,11 @@ def main():
         
         # Run test with dynamic offset calculation from current MTC time
         if mtc_receiver:
-            success = run_test(test_name, audio_file, player_binary, osc_port, mtc_sender, mtc_receiver, base_port + port_counter)
+            success = run_test(test_name, audio_file, player_binary, osc_port, mtc_sender, mtc_receiver, base_port + port_counter, use_pw_jack)
         else:
             # Fallback: use static offset if receiver not available
             print(f"\n⚠ Using static offset (MTC receiver not available)")
-            success = run_test(test_name, audio_file, player_binary, osc_port, mtc_sender, None, base_port + port_counter)
+            success = run_test(test_name, audio_file, player_binary, osc_port, mtc_sender, None, base_port + port_counter, use_pw_jack)
         
         results.append((test_name, success))
         port_counter += 1

@@ -43,6 +43,8 @@ The project has comprehensive test coverage divided into two categories:
 ### AudioFstream (`test_audiofstream.cpp`)
 **Coverage: ~85%** (Core functionality)
 
+**Note:** AudioFstream now uses the cuems-mediadecoder module for media file reading and decoding, providing support for various audio formats (WAV, MP3, AAC, FLAC, OGG, etc.) through FFmpeg.
+
 ✅ **Constructor/Destructor Tests**
 - Constructor with empty filename
 - Constructor with filename
