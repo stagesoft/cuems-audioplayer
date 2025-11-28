@@ -231,7 +231,9 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
     // If we are receiving MTC and following it...
     // Or we are not receiving it and we do not stop on its lost
     // And we haven't reached the end of the file...
-    if (    ( (ap->mtcReceiver.isTimecodeRunning && ap->followingMtc) || 
+    // Use isTimecodeActive() for smoother detection (uses time averaging)
+    bool timecodeActive = ap->mtcReceiver.isTimecodeActive();
+    if (    ( (timecodeActive && ap->followingMtc) || 
             (ap->mtcSignalLost && !ap->stopOnMTCLost) ) &&
             ap->playheadControl == 1 ) {
         unsigned int count = 0;
@@ -239,7 +241,7 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
 
         // Check play control flags
         // If there is MTC signal and we haven't started, check it
-        if ( ap->mtcReceiver.isTimecodeRunning ) {
+        if ( timecodeActive ) {
             if ( !ap->mtcSignalStarted ) {
                 CuemsLogger::getLogger()->logInfo("MTC -> Play started");
                 ap->mtcSignalStarted = true;
@@ -263,12 +265,14 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
 
         // Now we start playing in two different cases:
         // 1) after MTC: if there is MTC signal then we treat it
-        if ( ap->mtcReceiver.isTimecodeRunning && ap->followingMtc && !ap->mtcSignalLost )
+        if ( timecodeActive && ap->followingMtc && !ap->mtcSignalLost )
         {
             // Tollerance 2 frames, due to the MTC 8 packages -> 2 frames relay
-            long int tollerance = MTC_FRAMES_TOLLERANCE * ( 1000 / (float) ap->mtcReceiver.curFrameRate ) * ap->audioMillisecondSize;
+            long int tollerance = MTC_FRAMES_TOLLERANCE * ( 1000 / (float) MtcReceiver::curFrameRate ) * ap->audioMillisecondSize;
             
-            long int mtcHeadInBytes = ap->mtcReceiver.mtcHead * ap->audioMillisecondSize ;
+            // Use estimatedCurrentHead() for smooth, extrapolated time tracking
+            // This eliminates jitter from discrete quarter-frame updates
+            long int mtcHeadInBytes = ap->mtcReceiver.estimatedCurrentHead() * ap->audioMillisecondSize ;
 
             long int difference = ap->playHead - mtcHeadInBytes;
 
@@ -397,7 +401,7 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
         // Check play control flags
         // if we already started and we have no MTC signal, and it was 
         // already lost, it is lost now
-        if (    !ap->mtcReceiver.isTimecodeRunning && 
+        if (    !timecodeActive && 
                 ap->mtcSignalStarted && 
                 !ap->mtcSignalLost ) {
             CuemsLogger::getLogger()->logInfo("MTC signal lost");
@@ -410,8 +414,8 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
     // At the end, if we are following MTC but it is not running right now
     // let's fix our head to MTC head now it's stopped
     /*
-    if ( ! ap->mtcReceiver.isTimecodeRunning && ap->followingMtc ) {
-        ap->playHead = ap->mtcReceiver.mtcHead * ap->audioMillisecondSize;
+    if ( !timecodeActive && ap->followingMtc ) {
+        ap->playHead = ap->mtcReceiver.estimatedCurrentHead() * ap->audioMillisecondSize;
     }
     */
 
