@@ -71,6 +71,11 @@ AudioPlayer::AudioPlayer(   int port,
 	// loadMediaConfig();
 
     //////////////////////////////////////////////////////////
+    // Enable network mode for MTC over rtpmidid
+    // This uses more tolerant timeouts for network latency/jitter
+    MtcReceiver::setNetworkMode(true);
+
+    //////////////////////////////////////////////////////////
     // Set up working class members
 
     // Set resample quality before opening audio stream
