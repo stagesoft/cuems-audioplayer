@@ -1,3 +1,24 @@
+cuems-audioplayer (0.0.3-5) bookworm; urgency=medium
+  * reset resampler estate if active (foor loop /seek)
+
+ -- Ion Reguera <ion@stagelab.coop>  Thu, 12 Feb 2026 14:11:58 +0100
+
+cuems-audioplayer (0.0.3-4) bookworm; urgency=medium
+  * more /mtcfollow and /stoponlost fixes
+
+ -- Ion Reguera <ion@stagelab.coop>  Thu, 12 Feb 2026 14:11:58 +0100
+
+cuems-audioplayer (0.0.3-3) bookworm; urgency=medium
+  * make /mtcfollow and /stoponlost OSC commands accept actual values instead of toggling
+
+ -- Ion Reguera <ion@stagelab.coop>  Thu, 12 Feb 2026 13:11:58 +0100
+
+cuems-audioplayer (0.0.3-2) bookworm; urgency=medium
+
+  update package version number
+
+ -- Ion Reguera <ion@stagelab.coop>  Thu, 12 Feb 2026 13:11:58 +0100
+
 cuems-audioplayer (0.0.3-1) bookworm; urgency=medium
 
   * Updated for Debian Bookworm
