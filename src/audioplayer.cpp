@@ -664,14 +664,18 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
         } else if ( (string)m.AddressPattern() == (OscReceiver::oscAddress + "/check") ) {
             CuemsLogger::getLogger()->logInfo("OSC: /check command");
             raise(SIGUSR1);
-        // Stop on lost
+        // Stop on lost - value: 0 = continue playing, non-zero = stop on MTC lost
         } else if ( (string)m.AddressPattern() == (OscReceiver::oscAddress + "/stoponlost") ) {
-            CuemsLogger::getLogger()->logInfo("OSC: /stoponlost command");
-            stopOnMTCLost = !stopOnMTCLost;
-        // MTC Follow
+            int32_t valueOSC;
+            m.ArgumentStream() >> valueOSC >> osc::EndMessage;
+            stopOnMTCLost = (valueOSC != 0);
+            CuemsLogger::getLogger()->logInfo("OSC: /stoponlost set to " + std::to_string(stopOnMTCLost));
+        // MTC Follow - value: 0 = don't follow MTC, non-zero = follow MTC
         } else if ( (string)m.AddressPattern() == (OscReceiver::oscAddress + "/mtcfollow") ) {
-            CuemsLogger::getLogger()->logInfo("OSC: /mtcfollow command");
-            followingMtc = !followingMtc;
+            int32_t valueOSC;
+            m.ArgumentStream() >> valueOSC >> osc::EndMessage;
+            followingMtc = (valueOSC != 0);
+            CuemsLogger::getLogger()->logInfo("OSC: /mtcfollow set to " + std::to_string(followingMtc));
         }
         
     } catch ( osc::Exception& error ) {

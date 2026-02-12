@@ -92,7 +92,7 @@ state.
 
 ## Usage
 
-    audioplayer-cuems v. 0.0 - Copyright (C) 2020 Stage Lab & bTactic
+    audioplayer-cuems v. 0.0.3 - Copyright (C) 2020-2025 Stage Lab Coop
     This program comes with ABSOLUTELY NO WARRANTY; for details type `show w'.
     This is free software, and you are welcome to redistribute it
     under certain conditions; type `show c' for details.
