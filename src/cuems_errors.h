@@ -44,5 +44,6 @@
 #define CUEMS_EXIT_FAILED_OLA_SEL_SERV  -6              // OLA select server failed, daemon running?
 #define CUEMS_EXIT_FAILED_XML_INIT      -7              // XML parser initializer failed
 #define CUEMS_EXIT_NO_MIDI_PORTS_FOUND  -8              // Midi Error when opening port
+#define CUEMS_EXIT_INIT_FAILED          -9              // Player constructor failed (e.g. OSC port bind)
 
 #endif // CUEMS_ERRORS_H

@@ -298,21 +298,28 @@ int main( int argc, char *argv[] ) {
         exit ( CUEMS_EXIT_WRONG_PARAMETERS );
     }
     else {
-        myAudioPlayer = new AudioPlayer(
-            portNumber,
-            offsetMilliseconds,
-            endWaitMilliseconds,
-            "",
-            filePath.c_str(),
-            audioDeviceName,
-            "Audio_Player-" + processUuid,
-            stopOnLostFlag,
-            mtcFollowFlag,
-            2,  // Default 2 channels
-            44100,  // Default sample rate (will be overridden by JACK)
-            RtAudio::Api::UNIX_JACK,
-            resampleQuality
-        );
+        try {
+            myAudioPlayer = new AudioPlayer(
+                portNumber,
+                offsetMilliseconds,
+                endWaitMilliseconds,
+                "",
+                filePath.c_str(),
+                audioDeviceName,
+                "Audio_Player-" + processUuid,
+                stopOnLostFlag,
+                mtcFollowFlag,
+                2,  // Default 2 channels
+                44100,  // Default sample rate (will be overridden by JACK)
+                RtAudio::Api::UNIX_JACK,
+                resampleQuality
+            );
+        }
+        catch ( const std::exception& e ) {
+            logger->logError( "Failed to create AudioPlayer: " + std::string(e.what()) );
+            delete logger;
+            exit( CUEMS_EXIT_INIT_FAILED );
+        }
 
         logger->logOK("AudioPlayer object created OK!");
     }
