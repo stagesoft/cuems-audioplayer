@@ -18,6 +18,7 @@ pkg_check_modules(SOXR REQUIRED soxr)
 add_subdirectory(cuems-mediadecoder)
 add_subdirectory(oscreceiver)
 add_subdirectory(mtcreceiver)
+target_compile_definitions(mtcreceiver PUBLIC HAVE_CUEMS_LOGGER)
 add_subdirectory(cuemslogger)
 
 # Executable

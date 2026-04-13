@@ -61,7 +61,7 @@ AudioPlayer::AudioPlayer(   int port,
                             const string &resampleQuality )
                             :   // Members initialization
                             OscReceiver(port, oscRoute.c_str()),
-                            mtcReceiver(RtMidiIn::LINUX_ALSA, client_name),
+                            mtcReceiver(MTCRECV_DEFAULT_API, client_name),
                             audioPath(filePath),
                             nChannels(numberOfChannels),
                             sampleRate(sRate),
@@ -72,6 +72,9 @@ AudioPlayer::AudioPlayer(   int port,
                             stopOnMTCLost(stopOnLostFlag),
                             followingMtc(mtcFollowFlag)
  {
+    // Enable network-tolerant MTC timeouts (for rtpmidid / MTC over network)
+    mtcReceiver.setNetworkMode(true);
+
     //////////////////////////////////////////////////////////
     // Config tasks to be implemented later maybe
     // loadNodeConfig();
