@@ -350,7 +350,7 @@ int main( int argc, char *argv[] ) {
 
 //////////////////////////////////////////////////////////
 void showcopyright( void ) {
-    std::cout << "audioplayer-cuems v. " << 
+    std::cout << "cuems-audioplayer v. " << 
         cuems_audioplayer_VERSION_MAJOR << "." << cuems_audioplayer_VERSION_MINOR << 
         "." << cuems_audioplayer_VERSION_PATCH <<
         " - Copyright (C) 2020-2025 Stage Lab Coop" << endl <<
@@ -391,7 +391,7 @@ void showcopydisclaimer( void ) {
 
 //////////////////////////////////////////////////////////
 void showusage( void ) {
-    std::cout << "Usage :    audioplayer-cuems --port <osc_port> [other options] <wav_file_path>" << endl << endl <<
+    std::cout << "Usage :    cuems-audioplayer --port <osc_port> [other options] <wav_file_path>" << endl << endl <<
         "           COMPULSORY OPTIONS:" << endl << 
         "           --file , -f <file_path> : wav file to read audio data from." << endl <<
         "               File name can also be stated as the last argument with no option indicator." << endl << endl <<
@@ -419,7 +419,7 @@ void showusage( void ) {
         "               w : shows warranty disclaimer." << endl << 
         "               c : shows copyright disclaimer." << endl << endl << 
         "           Default audio device params are : 2 ch x 44.1K -> default device." << endl <<
-        "           audioplayer-cuems uses Jack Audio environment, make sure it's running." << endl << endl;
+        "           cuems-audioplayer uses Jack Audio environment, make sure it's running." << endl << endl;
 }
 
 //////////////////////////////////////////////////////////
