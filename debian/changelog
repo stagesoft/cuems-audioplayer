@@ -1,3 +1,10 @@
+cuems-audioplayer (0.0.3-6) bookworm; urgency=medium
+  * rename installed binary audioplayer-cuems -> cuems-audioplayer to align
+    with the cuems-<component> naming convention used across the ecosystem
+  * rename man page audioplayer-cuems.1 -> cuems-audioplayer.1 accordingly
+
+ -- Ion Reguera <ion@stagelab.coop>  Thu, 16 Apr 2026 19:55:00 +0200
+
 cuems-audioplayer (0.0.3-5) bookworm; urgency=medium
   * reset resampler estate if active (foor loop /seek)
 
