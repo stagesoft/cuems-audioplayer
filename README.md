@@ -92,12 +92,12 @@ state.
 
 ## Usage
 
-    audioplayer-cuems v. 0.0.3 - Copyright (C) 2020-2025 Stage Lab Coop
+    cuems-audioplayer v. 0.0.3 - Copyright (C) 2020-2025 Stage Lab Coop
     This program comes with ABSOLUTELY NO WARRANTY; for details type `show w'.
     This is free software, and you are welcome to redistribute it
     under certain conditions; type `show c' for details.
 
-    Usage :    audioplayer-cuems --port <osc_port> [other options] <media_file_path>
+    Usage :    cuems-audioplayer --port <osc_port> [other options] <media_file_path>
 
            COMPULSORY OPTIONS:
            --file , -f <file_path> : media file to read audio data from.
@@ -129,4 +129,4 @@ state.
                c : shows copyright disclaimer.
 
            Default audio device params are : 2 ch x 44.1K -> default device.
-           audioplayer-cuems uses Jack Audio environment, make sure it's running.
+           cuems-audioplayer uses Jack Audio environment, make sure it's running.

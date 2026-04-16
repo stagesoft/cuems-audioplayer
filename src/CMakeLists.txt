@@ -22,19 +22,19 @@ target_compile_definitions(mtcreceiver PUBLIC HAVE_CUEMS_LOGGER)
 add_subdirectory(cuemslogger)
 
 # Executable
-add_executable(audioplayer-cuems main.cpp audioplayer.cpp audiofstream.cpp commandlineparser.cpp)
-set_target_properties(audioplayer-cuems PROPERTIES DEBUG_POSTFIX ${CMAKE_DEBUG_POSTFIX})
+add_executable(cuems-audioplayer main.cpp audioplayer.cpp audiofstream.cpp commandlineparser.cpp)
+set_target_properties(cuems-audioplayer PROPERTIES DEBUG_POSTFIX ${CMAKE_DEBUG_POSTFIX})
 
 # Configure file
 configure_file(cuems_audioplayerConfig.h.in cuems_audioplayerConfig.h)
 
 # Link libraries
-target_link_libraries(audioplayer-cuems PUBLIC cuems-mediadecoder cuemslogger mtcreceiver oscreceiver)
-target_link_libraries(audioplayer-cuems PUBLIC rtaudio rtmidi pthread stdc++fs)
-target_link_libraries(audioplayer-cuems PUBLIC ${SOXR_LIBRARIES})
+target_link_libraries(cuems-audioplayer PUBLIC cuems-mediadecoder cuemslogger mtcreceiver oscreceiver)
+target_link_libraries(cuems-audioplayer PUBLIC rtaudio rtmidi pthread stdc++fs)
+target_link_libraries(cuems-audioplayer PUBLIC ${SOXR_LIBRARIES})
 
 # Include dirs
-target_include_directories(audioplayer-cuems PUBLIC
+target_include_directories(cuems-audioplayer PUBLIC
                             "${PROJECT_SOURCE_DIR}"
                             "${PROJECT_BINARY_DIR}"
                             "${PROJECT_SOURCE_DIR}/mtcreceiver"
@@ -43,7 +43,7 @@ target_include_directories(audioplayer-cuems PUBLIC
                             ${SOXR_INCLUDE_DIRS}
                         )
 # Install rules
-install(TARGETS audioplayer-cuems DESTINATION bin)
+install(TARGETS cuems-audioplayer DESTINATION bin)
 
 if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
     get_filename_component(CUEMS_PROJECT_ROOT "${CMAKE_SOURCE_DIR}" DIRECTORY)

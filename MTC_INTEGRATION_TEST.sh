@@ -46,14 +46,14 @@ fi
 # Find player binary (check multiple locations)
 PLAYER=""
 for player_path in \
-    "$BUILD_DIR/src/audioplayer-cuems_dbg" \
-    "$BUILD_DIR/src/audioplayer-cuems" \
-    "$BUILD_DIR/audioplayer-cuems_dbg" \
-    "$BUILD_DIR/audioplayer-cuems" \
-    "$SCRIPT_DIR/build/src/audioplayer-cuems_dbg" \
-    "$SCRIPT_DIR/build/src/audioplayer-cuems" \
-    "$SCRIPT_DIR/build/audioplayer-cuems_dbg" \
-    "$SCRIPT_DIR/build/audioplayer-cuems"
+    "$BUILD_DIR/src/cuems-audioplayer_dbg" \
+    "$BUILD_DIR/src/cuems-audioplayer" \
+    "$BUILD_DIR/cuems-audioplayer_dbg" \
+    "$BUILD_DIR/cuems-audioplayer" \
+    "$SCRIPT_DIR/build/src/cuems-audioplayer_dbg" \
+    "$SCRIPT_DIR/build/src/cuems-audioplayer" \
+    "$SCRIPT_DIR/build/cuems-audioplayer_dbg" \
+    "$SCRIPT_DIR/build/cuems-audioplayer"
 do
     if [ -f "$player_path" ]; then
         PLAYER="$player_path"
