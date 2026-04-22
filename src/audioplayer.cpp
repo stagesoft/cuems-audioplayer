@@ -114,9 +114,10 @@ AudioPlayer::AudioPlayer(   int port,
     audioSecondSize = sampleRate * audioFrameSize;
     audioMillisecondSize = ( (float) sampleRate / 1000 ) * audioFrameSize;
 
-    // Adjust initial offset
-    //      NOTE: Hardcoded 50 ms offset while testing sync with Xjadeo
-    headOffset.store((initOffset + XJADEO_ADJUSTMENT) * audioMillisecondSize);
+    // Adjust initial offset. outputLatencyMs_ is still 0 here (set after
+    // startStream() below); the post-stream recompute replaces this store
+    // with the latency-compensated value.
+    headOffset.store((initOffset + outputLatencyMs_.load()) * audioMillisecondSize);
     // Note: With FFmpeg, headers are handled internally - no manual offset needed
 
     // If we have a positive offset initialli we can already
@@ -310,13 +311,27 @@ AudioPlayer::AudioPlayer(   int port,
             
             // Use JACK's sample rate
             sampleRate = jackSampleRate;
-            
+
             // Recalculate timing with actual JACK sample rate
             audioSecondSize = sampleRate * audioFrameSize;
             audioMillisecondSize = ( (float) sampleRate / 1000 ) * audioFrameSize;
-            
+
+            // Query JACK output latency now that the stream is running and
+            // sampleRate reflects JACK's actual rate. Cached for use in
+            // headOffset computations so audio reaches speakers at wire-MTC
+            // (post-Phase-2 mtcreceiver has no implicit +80 ms bias). JACK
+            // period size is assumed fixed per show.
+            long latencyFrames = audio.getStreamLatency();
+            if (latencyFrames < 0) latencyFrames = 0;
+            long latencyMs = (latencyFrames * 1000LL) / sampleRate;
+            outputLatencyMs_.store(latencyMs);
+            CuemsLogger::getLogger()->logInfo(
+                "JACK output latency: " + std::to_string(latencyFrames)
+                + " frames (" + std::to_string(latencyMs) + " ms) @ "
+                + std::to_string(sampleRate) + " Hz");
+
             // Recalculate offset with correct sample rate
-            headOffset.store((initOffset + XJADEO_ADJUSTMENT) * audioMillisecondSize);
+            headOffset.store((initOffset + outputLatencyMs_.load()) * audioMillisecondSize);
             // Note: With FFmpeg, headers are handled internally - no manual offset needed
         }
         
@@ -648,7 +663,7 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
             // Offset argument in OSC command is in milliseconds
             // so we need to calculate in bytes in our file
 
-            headNewOffset.store(( offsetOSC + XJADEO_ADJUSTMENT ) * audioMillisecondSize);  // To bytes
+            headNewOffset.store(( offsetOSC + outputLatencyMs_.load() ) * audioMillisecondSize);  // To bytes
             // #region DEBUG
             dbg_log("OSC /offset PROCESSED floored_ms=" + std::to_string((long int)offsetOSC) + " new_offset_bytes=" + std::to_string(headNewOffset.load()) + " ms_size=" + std::to_string(audioMillisecondSize));
             // #endregion DEBUG

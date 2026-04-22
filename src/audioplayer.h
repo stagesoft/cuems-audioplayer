@@ -39,9 +39,6 @@
 
 //////////////////////////////////////////////////////////
 // Preprocessor definitions
-#ifndef XJADEO_ADJUSTMENT
-#define XJADEO_ADJUSTMENT 0
-#endif
 #ifndef MTC_FRAMES_TOLERANCE
 #define MTC_FRAMES_TOLERANCE 2
 #endif
@@ -124,6 +121,7 @@ class AudioPlayer : public OscReceiver
         std::atomic<long int> headOffset{0};    // Head offset (atomic: read/written from multiple threads)
         std::atomic <bool> offsetChanged = false;             // Flag to recognise when the offset is OSC changed
         std::atomic<long int> headNewOffset{0}; // Head offset to update through OSC (atomic for safety)
+        std::atomic<long int> outputLatencyMs_{0}; // JACK output pipeline latency; added to every headOffset compute so audio reaches speakers at wire-MTC (queried once, after startStream)
 
         long int endWaitTime = 0;               // End time to wait before quitting
 
