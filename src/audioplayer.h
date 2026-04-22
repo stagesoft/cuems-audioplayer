@@ -71,15 +71,23 @@ class AudioPlayer : public OscReceiver
                         long int initOffset = 0,
                         long int finalWait = 0,
                         const string oscRoute = "/",
-                        const string filePath = "", 
+                        const string filePath = "",
                         const string deviceName = "",
                         const string &client_name = "Audio_Player",
                         const bool stopOnLostFlag = true,
                         const bool mtcFollowFlag = false,
-                        unsigned int numberOfChannels = 2, 
+                        unsigned int numberOfChannels = 2,
                         unsigned int sRate = 44100,
                         RtAudio::Api audioApi = RtAudio::Api::UNIX_JACK,
-                        const string &resampleQuality = "hq" );
+                        const string &resampleQuality = "hq",
+                        long explicitLatencyMs = -1 );
+
+        // Set the audio output-pipeline latency compensation in ms.
+        // Values outside [0, 500] are clamped. Thread-safe (atomic).
+        // Intended for future OSC retuning; the primary path for setting
+        // this at startup is the explicitLatencyMs ctor parameter, which
+        // must be set before the JACK query runs.
+        void setOutputLatencyMs(long ms);
         ~AudioPlayer( void );
         //////////////////////////////////////////
 
@@ -122,6 +130,7 @@ class AudioPlayer : public OscReceiver
         std::atomic <bool> offsetChanged = false;             // Flag to recognise when the offset is OSC changed
         std::atomic<long int> headNewOffset{0}; // Head offset to update through OSC (atomic for safety)
         std::atomic<long int> outputLatencyMs_{0}; // JACK output pipeline latency; added to every headOffset compute so audio reaches speakers at wire-MTC (queried once, after startStream)
+        long m_explicitLatencyMs;             // -1 = no override, use JACK-queried value. Set once in ctor from the explicitLatencyMs parameter (fed by --output-latency-ms CLI arg from settings.xml).
 
         long int endWaitTime = 0;               // End time to wait before quitting
 

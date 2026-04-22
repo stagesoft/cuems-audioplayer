@@ -69,19 +69,20 @@ std::atomic <bool> AudioPlayer::endOfPlay = false;
 std::atomic <bool> AudioPlayer::outOfFile = false;
 
 //////////////////////////////////////////////////////////
-AudioPlayer::AudioPlayer(   int port, 
+AudioPlayer::AudioPlayer(   int port,
                             long int initOffset,
                             long int finalWait,
                             const string oscRoute,
-                            const string filePath, 
+                            const string filePath,
                             const string deviceName,
                             const string &client_name,
                             const bool stopOnLostFlag,
                             const bool mtcFollowFlag,
-                            unsigned int numberOfChannels, 
+                            unsigned int numberOfChannels,
                             unsigned int sRate,
                             RtAudio::Api audioApi,
-                            const string &resampleQuality )
+                            const string &resampleQuality,
+                            long explicitLatencyMs )
                             :   // Members initialization
                             OscReceiver(port, oscRoute.c_str()),
                             mtcReceiver(MTCRECV_DEFAULT_API, client_name),
@@ -89,6 +90,7 @@ AudioPlayer::AudioPlayer(   int port,
                             nChannels(numberOfChannels),
                             sampleRate(sRate),
                             deviceName(deviceName),
+                            m_explicitLatencyMs(explicitLatencyMs),
                             audio(audioApi),
                             audioFile(filePath.c_str()),  // Open file to check format
                             endWaitTime(finalWait),
@@ -316,19 +318,32 @@ AudioPlayer::AudioPlayer(   int port,
             audioSecondSize = sampleRate * audioFrameSize;
             audioMillisecondSize = ( (float) sampleRate / 1000 ) * audioFrameSize;
 
-            // Query JACK output latency now that the stream is running and
-            // sampleRate reflects JACK's actual rate. Cached for use in
-            // headOffset computations so audio reaches speakers at wire-MTC
-            // (post-Phase-2 mtcreceiver has no implicit +80 ms bias). JACK
-            // period size is assumed fixed per show.
-            long latencyFrames = audio.getStreamLatency();
-            if (latencyFrames < 0) latencyFrames = 0;
-            long latencyMs = (latencyFrames * 1000LL) / sampleRate;
-            outputLatencyMs_.store(latencyMs);
-            CuemsLogger::getLogger()->logInfo(
-                "JACK output latency: " + std::to_string(latencyFrames)
-                + " frames (" + std::to_string(latencyMs) + " ms) @ "
-                + std::to_string(sampleRate) + " Hz");
+            if (m_explicitLatencyMs >= 0) {
+                // Explicit override from --output-latency-ms CLI arg
+                // (fed by settings.xml). Suppress the JACK query so the
+                // operator-configured value wins.
+                long clamped = m_explicitLatencyMs;
+                if (clamped > 500) clamped = 500;
+                outputLatencyMs_.store(clamped);
+                CuemsLogger::getLogger()->logInfo(
+                    "Audio output latency explicitly set to "
+                    + std::to_string(clamped)
+                    + " ms (CLI override; JACK query skipped)");
+            } else {
+                // Query JACK output latency now that the stream is running and
+                // sampleRate reflects JACK's actual rate. Cached for use in
+                // headOffset computations so audio reaches speakers at wire-MTC
+                // (post-Phase-2 mtcreceiver has no implicit +80 ms bias). JACK
+                // period size is assumed fixed per show.
+                long latencyFrames = audio.getStreamLatency();
+                if (latencyFrames < 0) latencyFrames = 0;
+                long latencyMs = (latencyFrames * 1000LL) / sampleRate;
+                outputLatencyMs_.store(latencyMs);
+                CuemsLogger::getLogger()->logInfo(
+                    "JACK output latency: " + std::to_string(latencyFrames)
+                    + " frames (" + std::to_string(latencyMs) + " ms) @ "
+                    + std::to_string(sampleRate) + " Hz");
+            }
 
             // Recalculate offset with correct sample rate
             headOffset.store((initOffset + outputLatencyMs_.load()) * audioMillisecondSize);
@@ -759,4 +774,14 @@ bool AudioPlayer::loadMediaConfig( void ) {
     return true;
 }
 */
+
+//////////////////////////////////////////////////////////
+void AudioPlayer::setOutputLatencyMs(long ms) {
+    if (ms < 0) ms = 0;
+    if (ms > 500) ms = 500;
+    outputLatencyMs_.store(ms);
+    CuemsLogger::getLogger()->logInfo(
+        "Audio output latency compensation updated to "
+        + std::to_string(ms) + " ms");
+}
 
