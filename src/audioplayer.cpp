@@ -467,7 +467,9 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
         // 1) after MTC: if there is MTC signal then we treat it
         if ( ap->mtcReceiver.isTimecodeRunning && ap->followingMtc && !ap->mtcSignalLost )
         {
-            // Tolerance 2 frames, due to the MTC 8 packages -> 2 frames delay
+            // Tolerance 2 frames as a jitter budget against network-MTC
+            // arrival variance. Not related to any implicit MTC bias —
+            // mtcreceiver returns raw wire-MTC post-Phase-2.
             // Validate frame rate to prevent division by zero
             unsigned char frameRate = ap->mtcReceiver.curFrameRate.load();
             if (frameRate == 0) {
