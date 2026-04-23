@@ -37,29 +37,6 @@
 
 #include "audioplayer.h"
 
-// #region DEBUG
-#include <fstream>
-#include <chrono>
-#include <iomanip>
-#include <sstream>
-#include <sys/stat.h>
-static void dbg_log(const std::string& msg) {
-    try {
-        mkdir("/tmp/.claude", 0755);
-        auto now = std::chrono::system_clock::now();
-        auto us = std::chrono::duration_cast<std::chrono::microseconds>(
-            now.time_since_epoch()) % 1000000;
-        auto t = std::chrono::system_clock::to_time_t(now);
-        std::tm tm_buf{};
-        localtime_r(&t, &tm_buf);
-        std::ofstream f("/tmp/.claude/debug.log", std::ios::app);
-        f << "[" << std::put_time(&tm_buf, "%Y-%m-%dT%H:%M:%S")
-          << "." << std::setw(6) << std::setfill('0') << us.count()
-          << "] [AUDIO] [DEBUG H3 H4 H6 H7] " << msg << "\n";
-    } catch (...) {}
-}
-// #endregion DEBUG
-
 ////////////////////////////////////////////
 // Initializing static class members
 
@@ -520,12 +497,6 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
                     if ( ap->audioFile.eof() ) {
                         ap->audioFile.clear();
                     }
-                    // #region DEBUG
-                    {
-                        bool _was_offset = ap->headOffset.load() != 0;
-                        dbg_log("SEEK callback offset_change=" + std::to_string(_was_offset) + " mtc_head_bytes=" + std::to_string(mtcHeadInBytes) + " head_offset_bytes=" + std::to_string(ap->headOffset.load()) + " seek_pos=" + std::to_string(seekPosition) + " file_size=" + std::to_string(fileSize) + " mtc_head_ms=" + std::to_string(ap->mtcReceiver.mtcHead.load()));
-                    }
-                    // #endregion DEBUG
                     // Seek to the calculated position
                     ap->audioFile.seekg( seekPosition , ios_base::beg );
                     // Update playHead to match where we actually are (without offset, as offset is separate)
@@ -670,9 +641,6 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
             // args >> volumeMaster[0] >> osc::EndMessage;
             float offsetOSC;
             m.ArgumentStream() >> offsetOSC >> osc::EndMessage;
-            // #region DEBUG
-            dbg_log("OSC /offset RECV raw_value=" + std::to_string(offsetOSC));
-            // #endregion DEBUG
             offsetOSC = floor(offsetOSC);
 
             CuemsLogger::getLogger()->logInfo("OSC: new offset value " + std::to_string((long int)offsetOSC));
@@ -681,9 +649,6 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
             // so we need to calculate in bytes in our file
 
             headNewOffset.store(( offsetOSC + outputLatencyMs_.load() ) * audioMillisecondSize);  // To bytes
-            // #region DEBUG
-            dbg_log("OSC /offset PROCESSED floored_ms=" + std::to_string((long int)offsetOSC) + " new_offset_bytes=" + std::to_string(headNewOffset.load()) + " ms_size=" + std::to_string(audioMillisecondSize));
-            // #endregion DEBUG
 
             // Note: With FFmpeg, headers are handled internally - no manual offset needed
 
