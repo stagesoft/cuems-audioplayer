@@ -46,19 +46,20 @@ std::atomic <bool> AudioPlayer::endOfPlay = false;
 std::atomic <bool> AudioPlayer::outOfFile = false;
 
 //////////////////////////////////////////////////////////
-AudioPlayer::AudioPlayer(   int port, 
+AudioPlayer::AudioPlayer(   int port,
                             long int initOffset,
                             long int finalWait,
                             const string oscRoute,
-                            const string filePath, 
+                            const string filePath,
                             const string deviceName,
                             const string &client_name,
                             const bool stopOnLostFlag,
                             const bool mtcFollowFlag,
-                            unsigned int numberOfChannels, 
+                            unsigned int numberOfChannels,
                             unsigned int sRate,
                             RtAudio::Api audioApi,
-                            const string &resampleQuality )
+                            const string &resampleQuality,
+                            long explicitLatencyMs )
                             :   // Members initialization
                             OscReceiver(port, oscRoute.c_str()),
                             mtcReceiver(MTCRECV_DEFAULT_API, client_name),
@@ -66,6 +67,7 @@ AudioPlayer::AudioPlayer(   int port,
                             nChannels(numberOfChannels),
                             sampleRate(sRate),
                             deviceName(deviceName),
+                            m_explicitLatencyMs(explicitLatencyMs),
                             audio(audioApi),
                             audioFile(filePath.c_str()),  // Open file to check format
                             endWaitTime(finalWait),
@@ -91,9 +93,10 @@ AudioPlayer::AudioPlayer(   int port,
     audioSecondSize = sampleRate * audioFrameSize;
     audioMillisecondSize = ( (float) sampleRate / 1000 ) * audioFrameSize;
 
-    // Adjust initial offset
-    //      NOTE: Hardcoded 50 ms offset while testing sync with Xjadeo
-    headOffset.store((initOffset + XJADEO_ADJUSTMENT) * audioMillisecondSize);
+    // Adjust initial offset. outputLatencyMs_ is still 0 here (set after
+    // startStream() below); the post-stream recompute replaces this store
+    // with the latency-compensated value.
+    headOffset.store((initOffset + outputLatencyMs_.load()) * audioMillisecondSize);
     // Note: With FFmpeg, headers are handled internally - no manual offset needed
 
     // If we have a positive offset initialli we can already
@@ -287,13 +290,40 @@ AudioPlayer::AudioPlayer(   int port,
             
             // Use JACK's sample rate
             sampleRate = jackSampleRate;
-            
+
             // Recalculate timing with actual JACK sample rate
             audioSecondSize = sampleRate * audioFrameSize;
             audioMillisecondSize = ( (float) sampleRate / 1000 ) * audioFrameSize;
-            
+
+            if (m_explicitLatencyMs >= 0) {
+                // Explicit override from --output-latency-ms CLI arg
+                // (fed by settings.xml). Suppress the JACK query so the
+                // operator-configured value wins.
+                long clamped = m_explicitLatencyMs;
+                if (clamped > 500) clamped = 500;
+                outputLatencyMs_.store(clamped);
+                CuemsLogger::getLogger()->logInfo(
+                    "Audio output latency explicitly set to "
+                    + std::to_string(clamped)
+                    + " ms (CLI override; JACK query skipped)");
+            } else {
+                // Query JACK output latency now that the stream is running and
+                // sampleRate reflects JACK's actual rate. Cached for use in
+                // headOffset computations so audio reaches speakers at wire-MTC
+                // (post-Phase-2 mtcreceiver has no implicit +80 ms bias). JACK
+                // period size is assumed fixed per show.
+                long latencyFrames = audio.getStreamLatency();
+                if (latencyFrames < 0) latencyFrames = 0;
+                long latencyMs = (latencyFrames * 1000LL) / sampleRate;
+                outputLatencyMs_.store(latencyMs);
+                CuemsLogger::getLogger()->logInfo(
+                    "JACK output latency: " + std::to_string(latencyFrames)
+                    + " frames (" + std::to_string(latencyMs) + " ms) @ "
+                    + std::to_string(sampleRate) + " Hz");
+            }
+
             // Recalculate offset with correct sample rate
-            headOffset.store((initOffset + XJADEO_ADJUSTMENT) * audioMillisecondSize);
+            headOffset.store((initOffset + outputLatencyMs_.load()) * audioMillisecondSize);
             // Note: With FFmpeg, headers are handled internally - no manual offset needed
         }
         
@@ -429,7 +459,9 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
         // 1) after MTC: if there is MTC signal then we treat it
         if ( ap->mtcReceiver.isTimecodeRunning && ap->followingMtc && !ap->mtcSignalLost )
         {
-            // Tolerance 2 frames, due to the MTC 8 packages -> 2 frames delay
+            // Tolerance 2 frames as a jitter budget against network-MTC
+            // arrival variance. Not related to any implicit MTC bias —
+            // mtcreceiver returns raw wire-MTC post-Phase-2.
             // Validate frame rate to prevent division by zero
             unsigned char frameRate = ap->mtcReceiver.curFrameRate.load();
             if (frameRate == 0) {
@@ -464,7 +496,7 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
                     ap->outOfFile = false;
                     if ( ap->audioFile.eof() ) {
                         ap->audioFile.clear();
-                    } 
+                    }
                     // Seek to the calculated position
                     ap->audioFile.seekg( seekPosition , ios_base::beg );
                     // Update playHead to match where we actually are (without offset, as offset is separate)
@@ -616,7 +648,7 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
             // Offset argument in OSC command is in milliseconds
             // so we need to calculate in bytes in our file
 
-            headNewOffset.store(( offsetOSC + XJADEO_ADJUSTMENT ) * audioMillisecondSize);  // To bytes
+            headNewOffset.store(( offsetOSC + outputLatencyMs_.load() ) * audioMillisecondSize);  // To bytes
 
             // Note: With FFmpeg, headers are handled internally - no manual offset needed
 
@@ -707,4 +739,14 @@ bool AudioPlayer::loadMediaConfig( void ) {
     return true;
 }
 */
+
+//////////////////////////////////////////////////////////
+void AudioPlayer::setOutputLatencyMs(long ms) {
+    if (ms < 0) ms = 0;
+    if (ms > 500) ms = 500;
+    outputLatencyMs_.store(ms);
+    CuemsLogger::getLogger()->logInfo(
+        "Audio output latency compensation updated to "
+        + std::to_string(ms) + " ms");
+}
 

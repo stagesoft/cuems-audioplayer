@@ -148,12 +148,6 @@ TEST_F(AudioPlayerTest, OutOfFileAtomicOperations) {
 TEST_F(AudioPlayerTest, ConstantsDefined) {
     // Test that preprocessor definitions exist
     // These are compile-time checks
-    #ifdef XJADEO_ADJUSTMENT
-        EXPECT_TRUE(true);
-    #else
-        EXPECT_TRUE(false); // Should be defined
-    #endif
-    
     #ifdef MTC_FRAMES_TOLERANCE
         EXPECT_TRUE(true);
     #else
@@ -212,12 +206,7 @@ TEST_F(AudioPlayerTest, AtomicThreadSafety) {
 
 // Test that AudioPlayer constants have expected values
 TEST_F(AudioPlayerTest, ConstantValues) {
-    // XJADEO_ADJUSTMENT should be 0 (from header)
-    #ifdef XJADEO_ADJUSTMENT
-        EXPECT_EQ(XJADEO_ADJUSTMENT, 0);
-    #endif
-    
-    // MTC_FRAMES_TOLLERANCE should be 2 (from header)
+    // MTC_FRAMES_TOLERANCE should be 2 (from header)
     #ifdef MTC_FRAMES_TOLERANCE
         EXPECT_EQ(MTC_FRAMES_TOLERANCE, 2);
     #endif

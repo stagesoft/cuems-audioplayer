@@ -268,6 +268,26 @@ int main( int argc, char *argv[] ) {
         }
     }
 
+    // --output-latency-ms <int>: explicit override of the JACK-queried
+    // output latency. Fed by the engine from settings.xml. Sentinel -1
+    // means "no override, use JACK query" (Phase-3 behavior).
+    long explicitLatencyMs = -1;
+    if ( argParser->optionExists("--output-latency-ms") ) {
+        std::string latencyParam = argParser->getParam("--output-latency-ms");
+        if ( !latencyParam.empty() ) {
+            try {
+                explicitLatencyMs = std::stol(latencyParam);
+            } catch ( const std::exception& e ) {
+                std::cout << "Invalid integer after --output-latency-ms: "
+                          << latencyParam << endl;
+                logger->getLogger()->logError(
+                    "Exiting with result code: "
+                    + std::to_string(CUEMS_EXIT_WRONG_PARAMETERS));
+                exit(CUEMS_EXIT_WRONG_PARAMETERS);
+            }
+        }
+    }
+
     delete argParser;
 
     // End of command line parsing
@@ -312,7 +332,8 @@ int main( int argc, char *argv[] ) {
                 2,  // Default 2 channels
                 44100,  // Default sample rate (will be overridden by JACK)
                 RtAudio::Api::UNIX_JACK,
-                resampleQuality
+                resampleQuality,
+                explicitLatencyMs
             );
         }
         catch ( const std::exception& e ) {
@@ -413,6 +434,10 @@ void showusage( void ) {
         "           --offset , -o <milliseconds> : playing time offset in milliseconds." << endl <<
         "               Positive (+) or (-) negative integer indicating time displacement." << endl <<
         "               Default is 0." << endl << endl <<
+        "           --output-latency-ms <milliseconds> : explicit override of the JACK" << endl <<
+        "               output latency compensation (0-500). When provided, the JACK" << endl <<
+        "               query is skipped and this value is used instead. Typically fed" << endl <<
+        "               by the engine from settings.xml; set on a per-node basis." << endl << endl <<
         "           --resample-quality , -r <quality> : resampling quality when file sample rate differs from" << endl <<
         "               JACK sample rate. Options: vhq (very high), hq (high, default), mq (medium), lq (low)." << endl <<
         "               Higher quality = better audio but more CPU usage. Default is 'hq'." << endl << endl <<
