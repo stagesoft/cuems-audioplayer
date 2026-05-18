@@ -367,12 +367,32 @@ AudioPlayer::AudioPlayer(   int port,
             // Update nChannels to match downmixed output
             nChannels = deviceChannels;
         } else if (fileChannels < nChannels) {
-            // File has fewer channels than requested, use file's channel count
-            std::cerr << "File has " << fileChannels << " channels, using that instead of requested " 
-                      << nChannels << " channels" << endl;
-            CuemsLogger::getLogger()->logInfo("Using file's " + std::to_string(fileChannels) + 
-                                              " channels (device supports " + std::to_string(deviceChannels) + ")");
-            nChannels = fileChannels;
+            // File has fewer channels than the JACK stream we already opened.
+            // We can't shrink the JACK port count after openStream(), so the
+            // file must be upmixed to match. Reopen with setTargetChannels()
+            // so swresample fills every JACK channel (mono → L=R, etc.).
+            // Without this the audioCallback writes fileChannels-worth of
+            // floats into an nChannels-interleaved buffer, and JACK plays
+            // them as nChannels/fileChannels× too fast (e.g. mono into
+            // stereo plays at 2× speed with stereo aliasing).
+            std::cerr << "File has " << fileChannels << " channels, upmixing to "
+                      << nChannels << " channels to match JACK stream" << endl;
+            CuemsLogger::getLogger()->logInfo("Upmixing " + std::to_string(fileChannels) +
+                                              " channels to " + std::to_string(nChannels) +
+                                              " channels to match JACK stream");
+
+            audioFile.close();
+            audioFile.setTargetChannels(nChannels);
+            audioFile.open(audioPath, ios::binary | ios::in);
+
+            if (!audioFile.good()) {
+                std::string str = "Error reopening audio file with upmixing: " + audioPath;
+                std::cerr << str << endl;
+                CuemsLogger::getLogger()->logError(str);
+                exit(CUEMS_EXIT_AUDIO_DEVICE_ERR);
+            }
+            // nChannels stays at the JACK stream's value; the file now delivers
+            // nChannels-interleaved frames so audioFrameSize remains valid.
         } else {
             // Device has enough channels, use file's native channel count
             std::cerr << "Playing " << fileChannels << " channels (device supports " 
