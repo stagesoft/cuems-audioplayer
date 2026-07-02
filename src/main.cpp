@@ -268,6 +268,26 @@ int main( int argc, char *argv[] ) {
         }
     }
 
+    // --output-latency-ms <int>: explicit override of the JACK-queried
+    // output latency. Fed by the engine from settings.xml. Sentinel -1
+    // means "no override, use JACK query" (Phase-3 behavior).
+    long explicitLatencyMs = -1;
+    if ( argParser->optionExists("--output-latency-ms") ) {
+        std::string latencyParam = argParser->getParam("--output-latency-ms");
+        if ( !latencyParam.empty() ) {
+            try {
+                explicitLatencyMs = std::stol(latencyParam);
+            } catch ( const std::exception& e ) {
+                std::cout << "Invalid integer after --output-latency-ms: "
+                          << latencyParam << endl;
+                logger->getLogger()->logError(
+                    "Exiting with result code: "
+                    + std::to_string(CUEMS_EXIT_WRONG_PARAMETERS));
+                exit(CUEMS_EXIT_WRONG_PARAMETERS);
+            }
+        }
+    }
+
     delete argParser;
 
     // End of command line parsing
@@ -298,21 +318,29 @@ int main( int argc, char *argv[] ) {
         exit ( CUEMS_EXIT_WRONG_PARAMETERS );
     }
     else {
-        myAudioPlayer = new AudioPlayer(
-            portNumber,
-            offsetMilliseconds,
-            endWaitMilliseconds,
-            "",
-            filePath.c_str(),
-            audioDeviceName,
-            "Audio_Player-" + processUuid,
-            stopOnLostFlag,
-            mtcFollowFlag,
-            2,  // Default 2 channels
-            44100,  // Default sample rate (will be overridden by JACK)
-            RtAudio::Api::UNIX_JACK,
-            resampleQuality
-        );
+        try {
+            myAudioPlayer = new AudioPlayer(
+                portNumber,
+                offsetMilliseconds,
+                endWaitMilliseconds,
+                "",
+                filePath.c_str(),
+                audioDeviceName,
+                "Audio_Player-" + processUuid,
+                stopOnLostFlag,
+                mtcFollowFlag,
+                2,  // Default 2 channels
+                44100,  // Default sample rate (will be overridden by JACK)
+                RtAudio::Api::UNIX_JACK,
+                resampleQuality,
+                explicitLatencyMs
+            );
+        }
+        catch ( const std::exception& e ) {
+            logger->logError( "Failed to create AudioPlayer: " + std::string(e.what()) );
+            delete logger;
+            exit( CUEMS_EXIT_INIT_FAILED );
+        }
 
         logger->logOK("AudioPlayer object created OK!");
     }
@@ -350,7 +378,7 @@ int main( int argc, char *argv[] ) {
 
 //////////////////////////////////////////////////////////
 void showcopyright( void ) {
-    std::cout << "audioplayer-cuems v. " << 
+    std::cout << "cuems-audioplayer v. " << 
         cuems_audioplayer_VERSION_MAJOR << "." << cuems_audioplayer_VERSION_MINOR << 
         "." << cuems_audioplayer_VERSION_PATCH <<
         " - Copyright (C) 2020-2025 Stage Lab Coop" << endl <<
@@ -391,7 +419,7 @@ void showcopydisclaimer( void ) {
 
 //////////////////////////////////////////////////////////
 void showusage( void ) {
-    std::cout << "Usage :    audioplayer-cuems --port <osc_port> [other options] <wav_file_path>" << endl << endl <<
+    std::cout << "Usage :    cuems-audioplayer --port <osc_port> [other options] <wav_file_path>" << endl << endl <<
         "           COMPULSORY OPTIONS:" << endl << 
         "           --file , -f <file_path> : wav file to read audio data from." << endl <<
         "               File name can also be stated as the last argument with no option indicator." << endl << endl <<
@@ -406,6 +434,10 @@ void showusage( void ) {
         "           --offset , -o <milliseconds> : playing time offset in milliseconds." << endl <<
         "               Positive (+) or (-) negative integer indicating time displacement." << endl <<
         "               Default is 0." << endl << endl <<
+        "           --output-latency-ms <milliseconds> : explicit override of the JACK" << endl <<
+        "               output latency compensation (0-500). When provided, the JACK" << endl <<
+        "               query is skipped and this value is used instead. Typically fed" << endl <<
+        "               by the engine from settings.xml; set on a per-node basis." << endl << endl <<
         "           --resample-quality , -r <quality> : resampling quality when file sample rate differs from" << endl <<
         "               JACK sample rate. Options: vhq (very high), hq (high, default), mq (medium), lq (low)." << endl <<
         "               Higher quality = better audio but more CPU usage. Default is 'hq'." << endl << endl <<
@@ -419,7 +451,7 @@ void showusage( void ) {
         "               w : shows warranty disclaimer." << endl << 
         "               c : shows copyright disclaimer." << endl << endl << 
         "           Default audio device params are : 2 ch x 44.1K -> default device." << endl <<
-        "           audioplayer-cuems uses Jack Audio environment, make sure it's running." << endl << endl;
+        "           cuems-audioplayer uses Jack Audio environment, make sure it's running." << endl << endl;
 }
 
 //////////////////////////////////////////////////////////

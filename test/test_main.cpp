@@ -40,7 +40,7 @@ TEST(MainFunctionsTest, ShowCopyright) {
     std::string output = oss.str();
     
     // Check that copyright information is displayed
-    EXPECT_NE(output.find("audioplayer-cuems"), std::string::npos);
+    EXPECT_NE(output.find("cuems-audioplayer"), std::string::npos);
     EXPECT_NE(output.find("Copyright"), std::string::npos);
     EXPECT_NE(output.find("Stage Lab"), std::string::npos);
 }

@@ -615,6 +615,10 @@ void AudioFstream::seekg(long long pos, ios_base::seekdir dir)
     // Clear EOF flag
     eofReached = false;
     
+    // Reset resampler state if active (critical for looping/seeking)
+    if (resamplingEnabled && resampler) {
+        soxr_clear(resampler);
+    }
     // Update current position
     currentSamplePos = targetSamplePos;
 }

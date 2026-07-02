@@ -30,7 +30,7 @@
 *.exe
 *.out
 *.app
-audioplayer-cuems
+cuems-audioplayer
 
 # Visual Code dirs
 .vscode

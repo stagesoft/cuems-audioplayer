@@ -142,7 +142,7 @@ def send_osc_message(host, port, address, *args):
         return False
 
 def find_player_binary():
-    """Find the audioplayer-cuems binary
+    """Find the cuems-audioplayer binary
     
     Searches relative to the script's location, so it works regardless of
     the current working directory.
@@ -152,20 +152,20 @@ def find_player_binary():
     
     # Possible paths relative to project root (where script is located)
     possible_paths = [
-        script_dir / 'build' / 'audioplayer-cuems_dbg',
-        script_dir / 'build' / 'audioplayer-cuems',
-        script_dir / 'build' / 'src' / 'audioplayer-cuems_dbg',
-        script_dir / 'build' / 'src' / 'audioplayer-cuems',
+        script_dir / 'build' / 'cuems-audioplayer_dbg',
+        script_dir / 'build' / 'cuems-audioplayer',
+        script_dir / 'build' / 'src' / 'cuems-audioplayer_dbg',
+        script_dir / 'build' / 'src' / 'cuems-audioplayer',
         # Also check if we're already in build directory
-        script_dir / 'audioplayer-cuems_dbg',
-        script_dir / 'audioplayer-cuems',
-        script_dir / 'src' / 'audioplayer-cuems_dbg',
-        script_dir / 'src' / 'audioplayer-cuems',
+        script_dir / 'cuems-audioplayer_dbg',
+        script_dir / 'cuems-audioplayer',
+        script_dir / 'src' / 'cuems-audioplayer_dbg',
+        script_dir / 'src' / 'cuems-audioplayer',
         # Check parent directory (if script is in build/)
-        script_dir.parent / 'build' / 'audioplayer-cuems_dbg',
-        script_dir.parent / 'build' / 'audioplayer-cuems',
-        script_dir.parent / 'build' / 'src' / 'audioplayer-cuems_dbg',
-        script_dir.parent / 'build' / 'src' / 'audioplayer-cuems',
+        script_dir.parent / 'build' / 'cuems-audioplayer_dbg',
+        script_dir.parent / 'build' / 'cuems-audioplayer',
+        script_dir.parent / 'build' / 'src' / 'cuems-audioplayer_dbg',
+        script_dir.parent / 'build' / 'src' / 'cuems-audioplayer',
     ]
     
     for path in possible_paths:
