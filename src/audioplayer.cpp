@@ -510,7 +510,36 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
                 long long seekPosition = mtcHeadInBytes + ap->headOffset.load();
                 unsigned long long fileSize = ap->audioFile.getFileSize();
                 
-                if ( (seekPosition >= 0) && (seekPosition <= (long long)fileSize) ){
+                if ( seekPosition < 0 ) {
+                    // Before file start: live MTC hasn't reached the cue's start
+                    // yet -- covers BOTH an early-armed future cue AND the
+                    // ordinary near-boundary timing slop at a reveal crossing.
+                    // HOLD SILENCE and keep waiting -- do NOT set
+                    // endOfStream/outOfFile here, or the read block below
+                    // (guarded by !outOfFile) is skipped, count stays 0 and the
+                    // cue is terminated before it ever plays ("Out of file
+                    // boundaries!"). Set playHead so (playHead + headOffset) stays
+                    // < 0, routing the read below into the existing "before file
+                    // start -> silence" branch until MTC crosses the start.
+                    ap->endOfStream = false;
+                    ap->outOfFile = false;
+                    if ( ap->audioFile.eof() ) {
+                        ap->audioFile.clear();
+                    }
+                    // Park the stream deterministically at byte 0 while holding.
+                    // The hold->play transition happens when playHead crosses
+                    // -headOffset naturally -- no correction/seekg necessarily
+                    // fires at that instant (playHead and mtcHeadInBytes advance
+                    // in lockstep during silence, so |difference| stays under
+                    // tolerance). The first real read must therefore resume from
+                    // the true start, not from a stale cursor left by a prior
+                    // play in this same per-cue process (STOP/GO re-arm, loop, or
+                    // an OSC-offset resurrection could otherwise replay wrong
+                    // content, or hit EOF -> count==0 -> premature termination).
+                    ap->audioFile.seekg( 0 , ios_base::beg );
+                    ap->playHead = seekPosition - ap->headOffset.load();
+                }
+                else if ( seekPosition <= (long long)fileSize ) {
 
                     ap->endOfStream = false;
                     ap->outOfFile = false;
@@ -523,6 +552,7 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
                     ap->playHead = seekPosition - ap->headOffset.load();
                 }
                 else {
+                    // Past end of file: genuine end of stream.
                     CuemsLogger::getLogger()->logInfo("Out of file boundaries!");
                     // Clear error flags to allow responding to future offset changes
                     // (e.g., when OSC offset command moves position back into bounds)
