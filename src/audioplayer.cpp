@@ -124,12 +124,10 @@ AudioPlayer::AudioPlayer(   int port,
             std::string str = "No audio devices found on API:" + 
                 std::to_string(audio.getCurrentApi());
 
-            std::cerr << str << endl;
             CuemsLogger::getLogger()->logError(str);
 
             str = "Maybe JACK NOT RUNNING!!!";
 
-            std::cerr << str << endl;
             CuemsLogger::getLogger()->logError(str);
 
             exit( CUEMS_EXIT_AUDIO_DEVICE_ERR );
@@ -199,7 +197,6 @@ AudioPlayer::AudioPlayer(   int port,
                 str += "Required: " + std::to_string(nChannels) + " output channels. ";
                 str += "Available devices:";
                 
-                std::cerr << str << endl;
                 CuemsLogger::getLogger()->logError(str);
                 
                 // List available devices for debugging
@@ -209,17 +206,14 @@ AudioPlayer::AudioPlayer(   int port,
                         std::string deviceStr = "  Device " + std::to_string(i) + ": " + info.name;
                         deviceStr += " (probed: " + std::string(info.probed ? "yes" : "no");
                         deviceStr += ", output channels: " + std::to_string(info.outputChannels) + ")";
-                        std::cerr << deviceStr << endl;
                         CuemsLogger::getLogger()->logError(deviceStr);
                     } catch (...) {
                         std::string deviceStr = "  Device " + std::to_string(i) + ": (failed to probe)";
-                        std::cerr << deviceStr << endl;
                         CuemsLogger::getLogger()->logError(deviceStr);
                     }
                 }
 
                 str = "Maybe JACK NOT RUNNING or no suitable output device available!";
-                std::cerr << str << endl;
                 CuemsLogger::getLogger()->logError(str);
 
                 exit( CUEMS_EXIT_AUDIO_DEVICE_ERR );
@@ -227,7 +221,6 @@ AudioPlayer::AudioPlayer(   int port,
         }
     }
     catch ( RtAudioError &error ) {
-        std::cerr << error.getMessage();
         CuemsLogger::getLogger()->logError( error.getMessage() );
 
         CuemsLogger::getLogger()->logInfo( "Exiting with result code: " + std::to_string(CUEMS_EXIT_AUDIO_DEVICE_ERR) );
@@ -330,7 +323,6 @@ AudioPlayer::AudioPlayer(   int port,
         // Check if we already have a valid audio file
         if (!audioFile.good()) {
             std::string str = "Error opening audio file: " + audioPath;
-            std::cerr << str << endl;
             CuemsLogger::getLogger()->logError(str);
             exit(CUEMS_EXIT_AUDIO_DEVICE_ERR);
         }
@@ -346,8 +338,6 @@ AudioPlayer::AudioPlayer(   int port,
         // This is how mpv does it - only downmix when necessary
         if (fileChannels > deviceChannels) {
             // File has more channels than device supports, need to downmix
-            std::cerr << "Device supports " << deviceChannels << " channels, file has " 
-                      << fileChannels << " channels - will downmix" << endl;
             CuemsLogger::getLogger()->logInfo("Downmixing " + std::to_string(fileChannels) + 
                                               " channels to " + std::to_string(deviceChannels) + 
                                               " channels to match device capabilities");
@@ -359,7 +349,6 @@ AudioPlayer::AudioPlayer(   int port,
             
             if (!audioFile.good()) {
                 std::string str = "Error reopening audio file with downmixing: " + audioPath;
-                std::cerr << str << endl;
                 CuemsLogger::getLogger()->logError(str);
                 exit(CUEMS_EXIT_AUDIO_DEVICE_ERR);
             }
@@ -375,8 +364,6 @@ AudioPlayer::AudioPlayer(   int port,
             // floats into an nChannels-interleaved buffer, and JACK plays
             // them as nChannels/fileChannels× too fast (e.g. mono into
             // stereo plays at 2× speed with stereo aliasing).
-            std::cerr << "File has " << fileChannels << " channels, upmixing to "
-                      << nChannels << " channels to match JACK stream" << endl;
             CuemsLogger::getLogger()->logInfo("Upmixing " + std::to_string(fileChannels) +
                                               " channels to " + std::to_string(nChannels) +
                                               " channels to match JACK stream");
@@ -387,7 +374,6 @@ AudioPlayer::AudioPlayer(   int port,
 
             if (!audioFile.good()) {
                 std::string str = "Error reopening audio file with upmixing: " + audioPath;
-                std::cerr << str << endl;
                 CuemsLogger::getLogger()->logError(str);
                 exit(CUEMS_EXIT_AUDIO_DEVICE_ERR);
             }
@@ -395,8 +381,6 @@ AudioPlayer::AudioPlayer(   int port,
             // nChannels-interleaved frames so audioFrameSize remains valid.
         } else {
             // Device has enough channels, use file's native channel count
-            std::cerr << "Playing " << fileChannels << " channels (device supports " 
-                      << deviceChannels << " channels)" << endl;
             CuemsLogger::getLogger()->logInfo("Playing " + std::to_string(fileChannels) + 
                                               " channels (device supports " + std::to_string(deviceChannels) + ")");
             nChannels = fileChannels;
@@ -406,7 +390,6 @@ AudioPlayer::AudioPlayer(   int port,
         audioFile.setTargetSampleRate(sampleRate);
     }
     catch (RtAudioError &error) {
-        std::cerr << error.getMessage();
         CuemsLogger::getLogger()->logError( error.getMessage() );
 
         CuemsLogger::getLogger()->logInfo( "Exiting with result code: " + std::to_string(CUEMS_EXIT_AUDIO_DEVICE_ERR) );
@@ -423,7 +406,6 @@ AudioPlayer::~AudioPlayer( void ) {
         audio.abortStream();
     }
     catch (RtAudioError& error) {
-        std::cerr << error.getMessage();
         CuemsLogger::getLogger()->logError( error.getMessage() );
     }
 
