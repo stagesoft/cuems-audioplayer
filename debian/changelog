@@ -1,3 +1,12 @@
+cuems-audioplayer (0.0.3-9) bookworm; urgency=medium
+
+  * Reconcile with origin/debian/bookworm: adopt the man-page rename
+    (audioplayer-cuems.1 -> cuems-audioplayer.1) that the divergent
+    remote line carried; the binary rename itself was already present
+    locally. No code changes vs 0.0.3-8.
+
+ -- Ion Reguera <ion@stagelab.coop>  Wed, 29 Jul 2026 20:24:26 +0200
+
 cuems-audioplayer (0.0.3-8) bookworm; urgency=medium
 
   * Journal logging: drop 26 stderr lines that duplicated adjacent
