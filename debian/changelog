@@ -1,3 +1,15 @@
+cuems-audioplayer (0.0.3-8) bookworm; urgency=medium
+
+  * Journal logging: drop 26 stderr lines that duplicated adjacent
+    CuemsLogger calls (each message was recorded twice under systemd,
+    once stamped info); six decode/resample error paths gain logError
+    and become visible to cuems-logs -e; stream-info dump consolidated
+    to one line; submodule pins converged on reconciled
+    cuemslogger/mtcreceiver/oscreceiver heads (cuemslogger master now
+    carries the anton closelog fix).
+
+ -- Ion Reguera <ion@stagelab.coop>  Wed, 29 Jul 2026 19:49:14 +0200
+
 cuems-audioplayer (0.0.3-7) bookworm; urgency=medium
 
   * Merge 24h-continuity-rc2 mtcreceiver (>24h MTC continuity) for test2
