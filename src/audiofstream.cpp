@@ -38,6 +38,7 @@
 
 #include "audiofstream.h"
 #include <cstring>
+#include <sstream>
 #include <algorithm>
 
 ////////////////////////////////////////////
@@ -114,7 +115,6 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
     
     // Open using MediaFileReader
     if (!fileReader.open(path)) {
-        std::cerr << "Unable to find or open file: " << path << endl;
         CuemsLogger::getLogger()->logError("Couldn't open file: " + path);
         errorState = true;
         fileOpen = false;
@@ -124,7 +124,6 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
     // Find audio stream
     audioStreamIndex = fileReader.findStream(AVMEDIA_TYPE_AUDIO);
     if (audioStreamIndex < 0) {
-        std::cerr << "Could not find audio stream in file" << endl;
         CuemsLogger::getLogger()->logError("No audio stream found in file");
         fileReader.close();
         errorState = true;
@@ -135,7 +134,6 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
     // Get codec parameters
     AVCodecParameters* codecParams = fileReader.getCodecParameters(audioStreamIndex);
     if (!codecParams) {
-        std::cerr << "Failed to get codec parameters" << endl;
         CuemsLogger::getLogger()->logError("Failed to get codec parameters");
         fileReader.close();
         errorState = true;
@@ -145,7 +143,6 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
     
     // Open audio decoder
     if (!audioDecoder.openCodec(codecParams)) {
-        std::cerr << "Failed to open audio codec" << endl;
         CuemsLogger::getLogger()->logError("Failed to open audio codec");
         fileReader.close();
         errorState = true;
@@ -157,7 +154,6 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
     packet = av_packet_alloc();
     frame = av_frame_alloc();
     if (!packet || !frame) {
-        std::cerr << "Failed to allocate packet/frame" << endl;
         CuemsLogger::getLogger()->logError("Failed to allocate packet/frame");
         cleanupFFmpeg();
         errorState = true;
@@ -169,7 +165,6 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
     AVSampleFormat sampleFmt;
     int channels, sampleRate;
     if (!audioDecoder.getAudioProperties(channels, sampleRate, sampleFmt)) {
-        std::cerr << "Failed to get audio properties" << endl;
         CuemsLogger::getLogger()->logError("Failed to get audio properties");
         cleanupFFmpeg();
         errorState = true;
@@ -177,12 +172,16 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
         return;
     }
     
-    // Log audio stream info for debugging
-    std::cerr << "Audio stream index: " << audioStreamIndex << endl;
+    // One consolidated stream-info line (was four bare stderr lines per spawn)
     const char* codec_name = avcodec_get_name(codecParams->codec_id);
-    std::cerr << "Codec: " << (codec_name ? codec_name : "unknown") << endl;
-    std::cerr << "Channels: " << channels << ", Sample rate: " << sampleRate << " Hz" << endl;
-    std::cerr << "Sample format: " << av_get_sample_fmt_name(sampleFmt) << endl;
+    {
+        std::ostringstream oss;
+        oss << "Audio stream " << audioStreamIndex
+            << ": codec=" << (codec_name ? codec_name : "unknown")
+            << " channels=" << channels << " rate=" << sampleRate << "Hz"
+            << " fmt=" << av_get_sample_fmt_name(sampleFmt);
+        CuemsLogger::getLogger()->logInfo(oss.str());
+    }
     fileChannels = (unsigned int)channels;
     fileSampleRate = (unsigned int)sampleRate;
     
@@ -210,7 +209,6 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
     unsigned int outputChannels = (targetChannels > 0) ? targetChannels : fileChannels;
     
     if (targetChannels > 0 && targetChannels != fileChannels) {
-        std::cerr << "Downmixing from " << fileChannels << " to " << targetChannels << " channels" << endl;
         CuemsLogger::getLogger()->logInfo("Downmixing audio: " + std::to_string(fileChannels) + 
                                           " -> " + std::to_string(targetChannels) + " channels");
     }
@@ -218,7 +216,6 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
     swrContext = audioDecoder.createSwrContextExplicit(outputChannels, fileSampleRate, AV_SAMPLE_FMT_FLT);
     
     if (!swrContext) {
-        std::cerr << "Failed to create swresample context" << endl;
         CuemsLogger::getLogger()->logError("Failed to create swresample context");
         cleanupFFmpeg();
         errorState = true;
@@ -293,7 +290,7 @@ bool AudioFstream::decodeNextFrame()
                 // Flush decoder
                 audioDecoder.sendPacket(nullptr);
             } else {
-                std::cerr << "Error reading frame: " << getFFmpegError(ret) << endl;
+                CuemsLogger::getLogger()->logError("Error reading frame: " + getFFmpegError(ret));
                 errorState = true;
                 return false;
             }
@@ -311,7 +308,7 @@ bool AudioFstream::decodeNextFrame()
             av_packet_unref(packet);
             
             if (ret < 0) {
-                std::cerr << "Error sending packet to decoder: " << getFFmpegError(ret) << endl;
+                CuemsLogger::getLogger()->logError("Error sending packet to decoder: " + getFFmpegError(ret));
                 errorState = true;
                 return false;
             }
@@ -330,19 +327,12 @@ bool AudioFstream::decodeNextFrame()
             eofReached = true;
             return false;
         } else if (ret < 0) {
-            std::cerr << "Error receiving frame from decoder: " << getFFmpegError(ret) << endl;
+            CuemsLogger::getLogger()->logError("Error receiving frame from decoder: " + getFFmpegError(ret));
             errorState = true;
             return false;
         }
         
         // Successfully decoded a frame
-        // Debug: log frame info for first few frames
-        static int frame_count = 0;
-        if (frame_count < 3) {
-            std::cerr << "Decoded frame " << frame_count << ": " << frame->nb_samples 
-                      << " samples, format: " << av_get_sample_fmt_name((AVSampleFormat)frame->format) << endl;
-            frame_count++;
-        }
         return true;
     }
 }
@@ -395,7 +385,7 @@ void AudioFstream::read(char* buffer, size_t bytes)
                                                  (const uint8_t**)frame->data, frame->nb_samples);
                     
                     if (out_samples < 0) {
-                        std::cerr << "Error converting audio samples" << endl;
+                        CuemsLogger::getLogger()->logError("Error converting audio samples");
                         errorState = true;
                         av_frame_unref(frame);
                         break;
@@ -434,7 +424,7 @@ void AudioFstream::read(char* buffer, size_t bytes)
                                                          &outputFramesGenerated);
                     
                     if (soxr_err) {
-                        std::cerr << "SOXR drain error: " << soxr_strerror(soxr_err) << endl;
+                        CuemsLogger::getLogger()->logError(std::string("SOXR drain error: ") + soxr_strerror(soxr_err));
                         break;
                     }
                     
@@ -461,7 +451,6 @@ void AudioFstream::read(char* buffer, size_t bytes)
                                                      tempFloatBuffer + floatsResampled, framesNeeded - (floatsResampled / fileChannels), &outputFramesGenerated);
                 
                 if (soxr_err) {
-                    std::cerr << "SOXR error: " << soxr_strerror(soxr_err) << endl;
                     CuemsLogger::getLogger()->logError("Resampling error: " + string(soxr_strerror(soxr_err)));
                     errorState = true;
                     break;
@@ -510,17 +499,10 @@ void AudioFstream::read(char* buffer, size_t bytes)
                                                  (const uint8_t**)frame->data, frame->nb_samples);
                     
                     if (out_samples < 0) {
-                        std::cerr << "Error converting audio samples: " << getFFmpegError(out_samples) << endl;
+                        CuemsLogger::getLogger()->logError("Error converting audio samples: " + getFFmpegError(out_samples));
                         errorState = true;
                         av_frame_unref(frame);
                         break;
-                    }
-                    
-                    // Debug: log conversion info for first few frames
-                    static int convert_count_no_resample = 0;
-                    if (convert_count_no_resample < 3) {
-                        std::cerr << "Converted " << out_samples << " samples to float (no resample, frame " << convert_count_no_resample << ")" << endl;
-                        convert_count_no_resample++;
                     }
                     
                     conversionBufferUsed = out_samples * fileChannels;
@@ -599,7 +581,6 @@ void AudioFstream::seekg(long long pos, ios_base::seekdir dir)
     
     // Seek using MediaFileReader
     if (!fileReader.seekToTime(timeSeconds, audioStreamIndex, AVSEEK_FLAG_BACKWARD)) {
-        std::cerr << "Seek error" << endl;
         CuemsLogger::getLogger()->logError("Seek error");
         errorState = true;
         return;
@@ -820,7 +801,6 @@ void AudioFstream::initializeResampler()
                            &error, &io_spec, &qualitySpec, nullptr);
     
     if (error || !resampler) {
-        std::cerr << "Failed to create resampler: " << (error ? error : "unknown error") << endl;
         CuemsLogger::getLogger()->logError("Failed to create resampler");
         resamplingEnabled = false;
         return;
