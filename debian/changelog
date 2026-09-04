@@ -1,3 +1,23 @@
+cuems-audioplayer (0.0.3-10) bookworm; urgency=medium
+
+  * Hold silence on a negative seek instead of terminating the cue
+    (869dyufeh). audioCallback's MTC-correction boundary check conflated
+    two cases in one else branch: a future-anchored cue, whose start_mtc
+    is still ahead of live MTC and therefore yields a negative
+    seekPosition, took the same path as a genuine past-end read and set
+    outOfFile=true. That skipped the read block, so count stayed 0 and
+    the cue died with 'Out of file boundaries!' before it ever played.
+    Split three ways: seekPosition < 0 holds silence and keeps waiting;
+    0..fileSize seeks and plays; > fileSize is a real end of stream. The
+    player becomes self-gating — it can follow MTC early and start
+    itself at start_mtc — which is the prerequisite for the engine
+    dropping its per-cue reveal OSC. Until now this fix existed only as
+    an unpushed local branch, so no deb and no host in the fleet carried
+    it, and the engine's deferred /mtcfollow was the only thing keeping
+    future-anchored audio cues alive.
+
+ -- Ion Reguera <ion@stagelab.coop>  Fri, 04 Sep 2026 14:07:47 +0200
+
 cuems-audioplayer (0.0.3-9) bookworm; urgency=medium
 
   * Reconcile with origin/debian/bookworm: adopt the man-page rename
