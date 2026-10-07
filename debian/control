@@ -2,7 +2,7 @@ Source: cuems-audioplayer
 Section: sound
 Priority: optional
 Maintainer: Ion Reguera <ion@stagelab.coop>
-Build-Depends: cmake (>=3.17~), debhelper (>=11~), librtaudio-dev, librtmidi-dev, jackd2, liboscpack-dev, libsoxr-dev, pkg-config, libavformat-dev, libavcodec-dev, libavutil-dev, libswresample-dev
+Build-Depends: cmake (>=3.17~), debhelper (>=11~), librtaudio-dev (>= 5.1), librtmidi-dev, jackd2, liboscpack-dev, libsoxr-dev, pkg-config, libavformat-dev, libavcodec-dev, libavutil-dev, libswresample-dev
 Standards-Version: 4.1.4
 Homepage: https://github.com/stagesoft/stagesoft-project
 Vcs-Git: https://github.com/stagesoft/cuems-audioplayer.git
