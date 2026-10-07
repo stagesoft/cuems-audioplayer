@@ -1,3 +1,20 @@
+cuems-audioplayer (0.0.3-11) bookworm; urgency=medium
+
+  * Never let RtAudio auto-connect the outports to system:playback_*
+    (869fcvz85, 869fcvzag): the stream is opened with
+    RTAUDIO_JACK_DONT_CONNECT. The engine always wires a player to the mixer,
+    and an auto-connect that landed after that wiring stayed, so the cue
+    sounded through the mixer and straight to the outputs, doubled and
+    outside the mixer's volume and mute. A player started by hand, outside
+    the engine, is silent until it is connected with jack_connect.
+  * Build-Depends: librtaudio-dev (>= 5.1), the first RtAudio with the flag
+    (5.2.0 in bookworm), so a build against an older library fails loudly
+    instead of silently dropping it.
+  * UNRELEASED until the live check on node01 (cuems-RELATIONS
+    Plans/2026-10-06-engine-audio-arm-port-wait.md).
+
+ -- Ion Reguera <ion@stagelab.coop>  Wed, 07 Oct 2026 12:00:00 +0200
+
 cuems-audioplayer (0.0.3-10) bookworm; urgency=medium
 
   * Hold silence on a negative seek instead of terminating the cue
