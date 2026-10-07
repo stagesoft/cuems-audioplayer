@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2026 Stagelab Coop SCCL
+SPDX-License-Identifier: GPL-3.0-or-later
+SPDX-FileContributor: Ion Reguera <ion@stagelab.coop>
+-->
+
 # cuems-audioplayer
 
 Part of the **CUEMS** ecosystem — see the [`cuems-RELATIONS`](https://github.com/stagesoft/cuems-RELATIONS) repo for the system index, architecture diagram, and protocol/port map.
@@ -15,7 +21,7 @@ git submodule update --init --recursive
 mkdir -p build && cd build && cmake .. && make -j$(nproc)
 ```
 
-Dependencies: `librtmidi-dev` (3.0.0), `librtaudio-dev` (5.0.0), `liboscpack-dev` (1.1.0), FFmpeg libs (via cuems-mediadecoder), `libsoxr-dev`. Deploy binaries with **stop the engine → cp → start** (the player is engine-spawned; swapping while it runs gives `Text file busy`).
+Dependencies: `librtmidi-dev` (3.0.0), `librtaudio-dev` (**≥ 5.1** — needed for `RTAUDIO_JACK_DONT_CONNECT`; 5.2.0 on casas and the deployed nodes), `liboscpack-dev` (1.1.0), FFmpeg libs (via cuems-mediadecoder), `libsoxr-dev`. Deploy binaries with **stop the engine → cp → start** (the player is engine-spawned; swapping while it runs gives `Text file busy`).
 
 ## MTC sync
 
@@ -45,3 +51,5 @@ belt-and-suspenders until the fleet runs the fixed binary).
 
 - **`debian/bookworm` is a DIVERGENT full branch** (was 19 ahead / 17 behind `master`, pins an old mtcreceiver, changelog behind the installed version). It must be reconciled with `master` before a clean `.deb` cut. On hosts running a hand-swapped binary, the package is `apt-mark hold`'d to protect it. Open follow-up: audioplayer deb 0.0.3-8 reconciliation.
 - Player subprocess stdout lands in the node-engine "Subprocess output" journal, not a dedicated unit log.
+
+**No JACK auto-connect (869fcvz85).** The stream is opened with `RTAUDIO_JACK_DONT_CONNECT` (`audioplayer.cpp`, `streamOps.flags`), so RtAudio never connects the outports to `system:playback_*` itself. The engine always wires the player to the mixer; an auto-connect landing after that wiring used to stay and double the cue (through the mixer and straight to the outputs). Consequence: a player started by hand, outside the engine, is silent until something connects it (`jack_connect`).
