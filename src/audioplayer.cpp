@@ -246,7 +246,18 @@ AudioPlayer::AudioPlayer(   int port,
 
 
     streamOps.streamName = client_name;
-    
+
+    // Never let RtAudio auto-connect our outports to system:playback_* when the
+    // stream starts. The engine always wires this player to the mixer
+    // (0_mixer); an auto-connect that lands after the engine's wiring stays
+    // and the cue sounds through the mixer AND straight to the outputs, doubled
+    // and outside the mixer's volume and mute (ClickUp 869fcvz85). The engine
+    // also removes such edges now, but an old engine would not.
+    // Needs RtAudio >= 5.1 (5.2.0 on casas and the deployed nodes). A player
+    // started by hand, outside the engine, is therefore not audible until
+    // something connects it (jack_connect).
+    streamOps.flags = RTAUDIO_JACK_DONT_CONNECT;
+
 
     try {
         // For JACK/pw-jack: Query the device's native sample rate to avoid mismatch
