@@ -1,3 +1,7 @@
+<!-- SPDX-FileCopyrightText: 2026 Stagelab Coop SCCL -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- SPDX-FileContributor: Ion Reguera <ion@stagelab.coop> -->
+
 <!--
 SPDX-FileCopyrightText: 2026 Stagelab Coop SCCL
 SPDX-License-Identifier: GPL-3.0-or-later
@@ -41,7 +45,15 @@ The MTC-correction path in `audioCallback` (`src/audioplayer.cpp`) computes
   cue — that is why the engine historically had to defer `/mtcfollow` to reveal.)
 - `0 ≤ seekPosition ≤ fileSize` → seek + play.
 - `seekPosition > fileSize` (**past end**) → genuine end of stream
-  (`"Out of file boundaries!"`, `endOfStream`/`outOfFile`).
+  (`"Out of file boundaries! seek=… ms, end=… ms"`, logged **once per entry**,
+  `endOfStream`/`outOfFile`).
+
+`fileSize` (`AudioFstream::getFileSize()`) is in bytes of what the stream
+**delivers**: 32-bit float frames of the **output** channel count. The stream
+always has 2 ports, so a mono file is reopened as stereo; before the
+1amfwm7e4wv hotfix `fileSize` counted the file's own channels, a mono file at
+the JACK rate reported half its length, and the first MTC re-sync past the
+middle silenced the cue (lleida-diposit, 2026-10).
 
 This makes the player **self-gating**: it can follow MTC early and auto-start at
 `start_mtc`, so the engine's per-cue reveal OSC becomes optional (kept as
@@ -49,7 +61,17 @@ belt-and-suspenders until the fleet runs the fixed binary).
 
 ## Field notes / gotchas
 
-- **`debian/bookworm` is a DIVERGENT full branch** (was 19 ahead / 17 behind `master`, pins an old mtcreceiver, changelog behind the installed version). It must be reconciled with `master` before a clean `.deb` cut. On hosts running a hand-swapped binary, the package is `apt-mark hold`'d to protect it. Open follow-up: audioplayer deb 0.0.3-8 reconciliation.
+- **A re-sync is an 80 ms jump.** The player follows MTC within 2 frames
+  (`MTC_FRAMES_TOLERANCE`); beyond that it seeks to the MTC position, skipping
+  (audio slow) or repeating (audio fast) ~80 ms. How often depends on the
+  audio clock against the MTC clock (`CLOCK_MONOTONIC` in libmtcmaster).
+  Measured 2026-10-19 from ALSA `hw_ptr`/`tstamp`: Behringer UMC204HD
+  **−240 ppm** → a jump every ~5.5 min; onboard HDA (test2 node01) −31 ppm →
+  every ~42 min. Anything that misbehaves "only past some point of a file" is
+  exposed once the file is longer than that interval. Smoothing it is ClickUp
+  1amfwm7e6cw.
+
+- **Releases are cut from `debian/bookworm`, which differs from `rc_1` in `src/`**: it carries `f35d539` (journal log priorities, stderr duplicates dropped) and other submodule pins. A fix lands on `rc_1` through a `fix/<slug>` PR and reaches the release through a `debian/<slug>` branch that merges it into `debian/bookworm` plus the changelog entry (869fcvzag PRs #2/#3, 1amfwm7e1pq). Expect a conflict wherever a fix touches a line next to a removed `std::cerr`. In a linked worktree `debian/rules` does not initialise the submodules (`.git` is a file there): run `git submodule update --init --recursive` first. On hosts running a hand-swapped binary, the package is `apt-mark hold`'d to protect it: check with `dpkg -V cuems-audioplayer`.
 - Player subprocess stdout lands in the node-engine "Subprocess output" journal, not a dedicated unit log.
 
 **No JACK auto-connect (869fcvz85).** The stream is opened with `RTAUDIO_JACK_DONT_CONNECT` (`audioplayer.cpp`, `streamOps.flags`), so RtAudio never connects the outports to `system:playback_*` itself. The engine always wires the player to the mixer; an auto-connect landing after that wiring used to stay and double the cue (through the mixer and straight to the outputs). Consequence: a player started by hand, outside the engine, is silent until something connects it (`jack_connect`).
