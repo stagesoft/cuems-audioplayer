@@ -26,6 +26,7 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 */
+// SPDX-FileContributor: Ion Reguera <ion@stagelab.coop>
 
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
@@ -564,7 +565,17 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
                 }
                 else {
                     // Past end of file: genuine end of stream.
-                    CuemsLogger::getLogger()->logInfo("Out of file boundaries!");
+                    // Logged once per entry (1amfwm7e4x3): this branch runs on
+                    // every callback while MTC moves on past the end, and
+                    // outOfFile is reset only when the position comes back in
+                    // bounds or a read returns data. Position and limit in ms,
+                    // so a cue that dies mid-file says where.
+                    if ( !ap->outOfFile ) {
+                        const long long msSize = ap->audioMillisecondSize > 0 ? ap->audioMillisecondSize : 1;
+                        CuemsLogger::getLogger()->logInfo("Out of file boundaries! seek=" +
+                            std::to_string(seekPosition / msSize) + " ms, end=" +
+                            std::to_string((long long)fileSize / msSize) + " ms");
+                    }
                     // Clear error flags to allow responding to future offset changes
                     // (e.g., when OSC offset command moves position back into bounds)
                     ap->audioFile.clear();
@@ -577,10 +588,10 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
 
         // 2) without MTC: we do not treat it but, in any case, we continue playing
         //      while we are not out of the file boundaries
+        // Total bytes of this buffer (also what the zero-fill below completes)
+        const unsigned long int bytesToRead = nBufferFrames * ap->audioFrameSize;
+
         if ( !ap->outOfFile ) {
-            // Calculate total bytes to read for this buffer
-            unsigned long int bytesToRead = nBufferFrames * ap->audioFrameSize;
-            
             if ( (ap->playHead + ap->headOffset.load()) >= 0 ) {
                 // Read entire buffer in ONE call - much more efficient for resampling!
                 ap->audioFile.read((char*) outputBuffer, bytesToRead);
@@ -601,13 +612,12 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
             ap->playHead += count;
         }
 
-        // If we didn't read enough bytes to fill the buffer, let's put some
-        // silence aferwards copying zeros to the rest of the buffer
-        if ( count < nBufferFrames ) {
-            unsigned long int bytes = (nBufferFrames - count) * ap->audioFrameSize;
-            unsigned long int startByte = count * ap->audioFrameSize;
-
-            memset( (char *)(outputBuffer) + startByte, 0, bytes );
+        // If we didn't read enough bytes to fill the buffer, zero the rest of
+        // it. count is in BYTES: comparing it with nBufferFrames (frames) left
+        // a short final read unfilled, and the previous period's audio played
+        // again at every end of file (D3, 2-5 ms measured on test2).
+        if ( count < bytesToRead ) {
+            memset( (char *)(outputBuffer) + count, 0, bytesToRead - count );
         }
 
         // If we did not read anything, we are out of boundaries, maybe...

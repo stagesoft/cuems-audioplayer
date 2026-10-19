@@ -19,11 +19,16 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 */
+// SPDX-FileContributor: Ion Reguera <ion@stagelab.coop>
 
 #include <gtest/gtest.h>
 #include <fstream>
 #include <filesystem>
 #include <cstring>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <vector>
 #include "audiofstream.h"
 
 namespace fs = std::filesystem;
@@ -332,3 +337,136 @@ TEST_F(AudioFstreamTest, SeekgVariousPositions) {
     // Should not crash
 }
 
+////////////////////////////////////////////
+// Channel conversion and the end-of-file limit (ClickUp 1amfwm7e4wv)
+//
+// The player opens its JACK stream with 2 ports and reopens a mono file with
+// setTargetChannels(2). getFileSize() is the limit the MTC correction path
+// compares seek positions against, so it must equal the bytes the stream
+// really delivers (32-bit float frames of the OUTPUT channel count).
+////////////////////////////////////////////
+namespace {
+
+void writePcmWav(const fs::path& path, unsigned channels, unsigned rate,
+                 unsigned bits, uint32_t frames)
+{
+    const uint32_t bytesPerSample = bits / 8;
+    const uint32_t blockAlign = channels * bytesPerSample;
+    const uint32_t dataSize = frames * blockAlign;
+    std::ofstream f(path, std::ios::binary);
+    auto u16 = [&f](uint32_t v) { f.put(char(v & 0xff)); f.put(char((v >> 8) & 0xff)); };
+    auto u32 = [&u16](uint32_t v) { u16(v & 0xffff); u16(v >> 16); };
+    f.write("RIFF", 4); u32(36 + dataSize); f.write("WAVE", 4);
+    f.write("fmt ", 4); u32(16); u16(1); u16(channels); u32(rate);
+    u32(rate * blockAlign); u16(blockAlign); u16(bits);
+    f.write("data", 4); u32(dataSize);
+    const double amp = 0.25 * double(1u << (bits - 1));
+    for (uint32_t n = 0; n < frames; n++) {
+        const int32_t v = int32_t(amp * std::sin(2.0 * M_PI * 1000.0 * n / rate));
+        for (unsigned c = 0; c < channels; c++)
+            for (uint32_t b = 0; b < bytesPerSample; b++)
+                f.put(char((v >> (8 * b)) & 0xff));
+    }
+}
+
+// The same calls, in the same order, as AudioPlayer's constructor: a plain
+// open, then close + reopen with the stream's channel count, then the JACK rate.
+void openLikePlayer(AudioFstream& s, const fs::path& p, unsigned targetChannels,
+                    unsigned jackRate)
+{
+    s.open(p.string(), std::ios::binary | std::ios::in);
+    if (targetChannels > 0) {
+        s.close();
+        s.setTargetChannels(targetChannels);
+        s.open(p.string(), std::ios::binary | std::ios::in);
+    }
+    s.setTargetSampleRate(jackRate);
+}
+
+// Reads in JACK-period-sized chunks (512 stereo float frames) until EOF.
+unsigned long long bytesToEof(AudioFstream& s)
+{
+    std::vector<char> buf(4096);
+    unsigned long long total = 0;
+    for (int guard = 0; guard < 10000000; guard++) {
+        s.read(buf.data(), buf.size());
+        const streamsize n = s.gcount();
+        if (n <= 0) break;
+        total += (unsigned long long)n;
+    }
+    return total;
+}
+
+class ChannelConversionTest : public ::testing::Test {
+protected:
+    fs::path wav(const std::string& name) {
+        fs::path p = fs::temp_directory_path() / ("hf_" + name + ".wav");
+        made.push_back(p);
+        return p;
+    }
+    void TearDown() override {
+        for (auto& p : made) fs::remove(p);
+    }
+    std::vector<fs::path> made;
+};
+
+}  // namespace
+
+TEST_F(ChannelConversionTest, MonoUpmixedNoResampleLimitIsOutputBytes) {
+    const uint32_t N = 48000;
+    auto p = wav("mono16_48k");
+    writePcmWav(p, 1, 48000, 16, N);
+    AudioFstream s;
+    openLikePlayer(s, p, 2, 48000);
+    ASSERT_TRUE(s.good());
+    EXPECT_EQ(s.getFileSize(), (unsigned long long)N * 2 * 4);
+    EXPECT_EQ(bytesToEof(s), s.getFileSize());
+}
+
+TEST_F(ChannelConversionTest, Mono24BitUpmixedNoResampleLimitIsOutputBytes) {
+    const uint32_t N = 48000;
+    auto p = wav("mono24_48k");
+    writePcmWav(p, 1, 48000, 24, N);
+    AudioFstream s;
+    openLikePlayer(s, p, 2, 48000);
+    ASSERT_TRUE(s.good());
+    EXPECT_EQ(s.getFileSize(), (unsigned long long)N * 2 * 4);
+    EXPECT_EQ(bytesToEof(s), s.getFileSize());
+}
+
+TEST_F(ChannelConversionTest, FourChannelDownmixedNoResampleLimitIsOutputBytes) {
+    const uint32_t N = 48000;
+    auto p = wav("quad16_48k");
+    writePcmWav(p, 4, 48000, 16, N);
+    AudioFstream s;
+    openLikePlayer(s, p, 2, 48000);
+    ASSERT_TRUE(s.good());
+    EXPECT_EQ(s.getFileSize(), (unsigned long long)N * 2 * 4);
+    EXPECT_EQ(bytesToEof(s), s.getFileSize());
+}
+
+// Control: the resampling branch of getFileSize() is already right.
+TEST_F(ChannelConversionTest, MonoUpmixedResampledLimitIsOutputBytes) {
+    const uint32_t N = 44100;
+    auto p = wav("mono16_44k");
+    writePcmWav(p, 1, 44100, 16, N);
+    AudioFstream s;
+    openLikePlayer(s, p, 2, 48000);
+    ASSERT_TRUE(s.good());
+    const unsigned long long expected = (unsigned long long)std::llround(N * 48000.0 / 44100.0) * 2 * 4;
+    EXPECT_EQ(s.getFileSize(), expected);
+    const long long diff = (long long)bytesToEof(s) - (long long)s.getFileSize();
+    EXPECT_LE(std::llabs(diff), 512LL * 2 * 4) << "bytes read to EOF minus limit = " << diff;
+}
+
+// Control: no conversion at all.
+TEST_F(ChannelConversionTest, StereoNoConversionLimitIsOutputBytes) {
+    const uint32_t N = 48000;
+    auto p = wav("stereo16_48k");
+    writePcmWav(p, 2, 48000, 16, N);
+    AudioFstream s;
+    openLikePlayer(s, p, 0, 48000);
+    ASSERT_TRUE(s.good());
+    EXPECT_EQ(s.getFileSize(), (unsigned long long)N * 2 * 4);
+    EXPECT_EQ(bytesToEof(s), s.getFileSize());
+}
