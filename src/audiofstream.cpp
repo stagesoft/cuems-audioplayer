@@ -26,6 +26,7 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 */
+// SPDX-FileContributor: Ion Reguera <ion@stagelab.coop>
 
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
@@ -201,15 +202,20 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
         totalSamples = 0;  // Will be updated as we decode
     }
     
-    // File size in bytes (32-bit float output for JACK)
-    fileSize = totalSamples * fileChannels * 4;  // 4 bytes per sample (32-bit float)
-    
-    // Setup libswresample for format conversion to float (and optional channel downmixing)
+    // Setup libswresample for format conversion to float (and optional channel up/downmixing)
     // Use AudioDecoder's createSwrContext which handles unknown channel layouts properly
     unsigned int outputChannels = (targetChannels > 0) ? targetChannels : fileChannels;
-    
+
+    // File size in bytes of what this stream DELIVERS: 32-bit float frames of
+    // the OUTPUT channel count. Computing it with the file's own count made a
+    // mono file reopened as stereo report half its length, so the first MTC
+    // re-sync past the middle was taken as "out of file" (1amfwm7e4wv).
+    fileSize = totalSamples * outputChannels * 4;  // 4 bytes per sample (32-bit float)
+
+    // fileChannels still holds the file's own count here (reassigned below).
     if (targetChannels > 0 && targetChannels != fileChannels) {
-        CuemsLogger::getLogger()->logInfo("Downmixing audio: " + std::to_string(fileChannels) + 
+        const char* kind = (targetChannels > fileChannels) ? "Upmixing" : "Downmixing";
+        CuemsLogger::getLogger()->logInfo(std::string(kind) + " audio: " + std::to_string(fileChannels) +
                                           " -> " + std::to_string(targetChannels) + " channels");
     }
     
@@ -706,7 +712,7 @@ unsigned long long AudioFstream::getFileSize() const
         return outputSamples * fileChannels * 4;  // 4 bytes per sample (32-bit float)
     }
     
-    // No resampling - return original file size
+    // No resampling - fileSize is already in output-channel bytes (see open())
     return fileSize;
 }
 
