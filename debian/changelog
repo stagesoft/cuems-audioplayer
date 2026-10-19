@@ -1,3 +1,22 @@
+cuems-audioplayer (0.0.3-12) bookworm; urgency=medium
+
+  * End-of-file limit in output-channel bytes (1amfwm7e4wv). The stream
+    always has 2 ports, so a mono file is reopened as stereo; the limit was
+    still computed for 1 channel, so at the JACK rate (no resampling) it was
+    half the real length and the first MTC re-sync past the middle
+    silenced the cue until its end. Reproduced by itself on a Behringer
+    UMC204HD box (clock -242 ppm vs MTC: a re-sync every ~5.5 min) at 10:44
+    into a 15:06 mono file, the lleida-diposit failure. The conversion log
+    now says Upmixing/Downmixing correctly.
+  * "Out of file boundaries!" is logged once per entry into the past-end
+    state, with the seek position and the limit in ms, instead of on every
+    audio callback (1amfwm7e4x3, ~25 000 lines per failed pass).
+  * Zero-fill after a short read compares bytes with bytes: the end of
+    every file no longer replays 2-5 ms of the previous period (D3).
+  * Rig evidence: cuems-RELATIONS baselines/1amfwm7e1pq-mono-eof.
+
+ -- Ion Reguera <ion@stagelab.coop>  Mon, 19 Oct 2026 13:37:30 +0200
+
 cuems-audioplayer (0.0.3-11) bookworm; urgency=medium
 
   * Never let RtAudio auto-connect the outports to system:playback_*
