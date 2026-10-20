@@ -63,8 +63,9 @@ belt-and-suspenders until the fleet runs the fixed binary).
 sync across the passes of a loop **only if (A) their durations are exactly the same, or
 (B) they are in the same container** (one file; this player extracts the audio). Two
 separate files of different lengths drift apart by the difference on every pass: an
-operator error, not a bug. Audio extracted from a video to a separate file is longer by
-the codec's padding (0–106 ms on `test_video_files/`), so that pair is never case A. The
+operator error, not a bug. Audio extracted from a video into a separate file keeps that
+video's audio-stream length (the VideoCue's period is its container's audio length), so that
+pair stays together; a video-only file next to an audio file of another length does not. The
 gapless, MTC-locked loop with one period per file is rev 3 of 869ejxng3 + 1amfwm7e6cw
 (`cuems-RELATIONS/Plans/2026-10-19-audio-loop-varispeed-869ejxng3-1amfwm7e6cw.md`).
 
