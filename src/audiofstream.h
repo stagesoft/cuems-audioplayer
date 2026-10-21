@@ -417,6 +417,7 @@ class AudioFstream
         bool looping() const;
         bool wrapFailed;
         int64_t fadeOutLeft, fadeOutLen;
+        double drainEndContent;     // E13: absolute content index one past the last fed sample (T7-1)
         size_t lastProduced;
         JobResult pendingPickup;
         void (*inputTap)(void*, const float*, size_t, int64_t, int64_t);
