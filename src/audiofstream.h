@@ -26,6 +26,7 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 */
+// SPDX-FileContributor: Ion Reguera <ion@stagelab.coop>
 
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
@@ -87,6 +88,11 @@ class AudioFstream
         unsigned int getSampleRate() const;
         unsigned int getBitsPerSample() const;
 
+        // Frames delivered by the decoder (after swr, at the FILE rate, below
+        // soxr) since open() or the last seek. At the true end of the stream
+        // this is the decoded length L (plan 869ejxng3 rev 3, step-0 gate).
+        int64_t getDecodedFrames() const;
+
     private:
         // cuems-mediadecoder members
         cuems_mediadecoder::MediaFileReader fileReader;
@@ -98,7 +104,11 @@ class AudioFstream
         
         // File state
         bool fileOpen;
-        bool eofReached;
+        bool eofReached;        // decoder AND swr fully drained (below soxr)
+        bool demuxEof;          // av_read_frame hit EOF, flush packet sent: draining
+        bool decoderDrained;    // the decoder returned AVERROR_EOF after the flush
+        bool resamplerDrained;  // soxr's tail delivered after eofReached
+        int64_t decodedFrames;
         bool errorState;
         streamsize lastBytesRead;
         
@@ -132,6 +142,7 @@ class AudioFstream
         void cleanupFFmpeg();
         soxr_quality_spec_t parseQualityString(const string& quality);
         bool decodeNextFrame();  // Decode one frame from FFmpeg
+        bool refillConversionBuffer();  // false once decoder and swr are drained
         string getFFmpegError(int errnum);  // Translate FFmpeg error codes
 };
 

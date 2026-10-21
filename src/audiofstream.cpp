@@ -56,6 +56,10 @@ AudioFstream::AudioFstream( const string filename,
     // Initialize file state
     fileOpen = false;
     eofReached = false;
+    demuxEof = false;
+    decoderDrained = false;
+    resamplerDrained = false;
+    decodedFrames = 0;
     errorState = false;
     lastBytesRead = 0;
     
@@ -246,6 +250,10 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
     fileOpen = true;
     errorState = false;
     eofReached = false;
+    demuxEof = false;
+    decoderDrained = false;
+    resamplerDrained = false;
+    decodedFrames = 0;
     currentSamplePos = 0;
     
     CuemsLogger::getLogger()->logOK("File open OK! : " + path);
@@ -283,74 +291,124 @@ bool AudioFstream::loadFile( const string path ) {
 ////////////////////////////////////////////
 // Decode next frame from FFmpeg
 ////////////////////////////////////////////
+// Receive first, feed only when the decoder asks for input. After the
+// demuxer's EOF the decoder is flushed and drained frame by frame until it
+// returns AVERROR_EOF: before, EOF was declared with the first drained frame
+// and the rest of the decoder's tail was lost at every end of file
+// (869ejxng3, plan rev 2 section 4.2a step 1).
 bool AudioFstream::decodeNextFrame()
 {
-    if (!fileOpen || eofReached) {
+    if (!fileOpen || decoderDrained || errorState) {
         return false;
     }
     
     while (true) {
-        // Read packet from MediaFileReader
-        int ret = fileReader.readPacket(packet);
+        int ret = audioDecoder.receiveFrame(frame);
         
-        if (ret < 0) {
-            if (ret == AVERROR_EOF) {
-                eofReached = true;
-                // Flush decoder
-                audioDecoder.sendPacket(nullptr);
-            } else {
-                std::cerr << "Error reading frame: " << getFFmpegError(ret) << endl;
-                errorState = true;
-                return false;
-            }
-        }
-        
-        // Skip non-audio packets
-        if (ret >= 0 && packet->stream_index != audioStreamIndex) {
-            av_packet_unref(packet);
-            continue;
-        }
-        
-        // Send packet to decoder
         if (ret >= 0) {
-            ret = audioDecoder.sendPacket(packet);
-            av_packet_unref(packet);
-            
-            if (ret < 0) {
-                std::cerr << "Error sending packet to decoder: " << getFFmpegError(ret) << endl;
-                errorState = true;
-                return false;
+            // Successfully decoded a frame
+            // Debug: log frame info for first few frames
+            static int frame_count = 0;
+            if (frame_count < 3) {
+                std::cerr << "Decoded frame " << frame_count << ": " << frame->nb_samples 
+                          << " samples, format: " << av_get_sample_fmt_name((AVSampleFormat)frame->format) << endl;
+                frame_count++;
             }
-        }
-        
-        // Receive decoded frame
-        ret = audioDecoder.receiveFrame(frame);
-        
-        if (ret == AVERROR(EAGAIN)) {
-            // Need more packets
-            if (eofReached) {
-                return false;  // No more data
-            }
-            continue;
+            return true;
         } else if (ret == AVERROR_EOF) {
-            eofReached = true;
+            decoderDrained = true;
             return false;
-        } else if (ret < 0) {
+        } else if (ret != AVERROR(EAGAIN)) {
             std::cerr << "Error receiving frame from decoder: " << getFFmpegError(ret) << endl;
             errorState = true;
             return false;
         }
         
-        // Successfully decoded a frame
-        // Debug: log frame info for first few frames
-        static int frame_count = 0;
-        if (frame_count < 3) {
-            std::cerr << "Decoded frame " << frame_count << ": " << frame->nb_samples 
-                      << " samples, format: " << av_get_sample_fmt_name((AVSampleFormat)frame->format) << endl;
-            frame_count++;
+        // EAGAIN: the decoder needs input
+        if (demuxEof) {
+            decoderDrained = true;  // flushed and still asking for input: nothing left
+            return false;
         }
-        return true;
+        
+        ret = fileReader.readPacket(packet);
+        if (ret == AVERROR_EOF) {
+            demuxEof = true;
+            audioDecoder.sendPacket(nullptr);  // enter draining mode
+            continue;
+        } else if (ret < 0) {
+            std::cerr << "Error reading frame: " << getFFmpegError(ret) << endl;
+            errorState = true;
+            return false;
+        }
+        
+        // Skip non-audio packets
+        if (packet->stream_index != audioStreamIndex) {
+            av_packet_unref(packet);
+            continue;
+        }
+        
+        ret = audioDecoder.sendPacket(packet);
+        av_packet_unref(packet);
+        if (ret < 0) {
+            std::cerr << "Error sending packet to decoder: " << getFFmpegError(ret) << endl;
+            errorState = true;
+            return false;
+        }
     }
+}
+
+////////////////////////////////////////////
+// Refill the float conversion buffer
+////////////////////////////////////////////
+// Decodes and converts until conversionBuffer holds data. At the end, drains
+// swr's tail; only when the decoder and swr are both empty is eofReached set
+// and false returned. Shared by both read paths.
+bool AudioFstream::refillConversionBuffer()
+{
+    while (conversionBufferPos >= conversionBufferUsed) {
+        if (eofReached || errorState) {
+            return false;
+        }
+        
+        uint8_t* out = (uint8_t*)conversionBuffer;
+        int max_out_samples = conversionBufferSize / fileChannels;
+        int out_samples = 0;
+        
+        if (decodeNextFrame()) {
+            // Account for libswresample's internal buffering delay
+            int64_t delay = swr_get_delay(swrContext, fileSampleRate);
+            int64_t estimated_out_samples = av_rescale_rnd(delay + frame->nb_samples,
+                                                            fileSampleRate, fileSampleRate,
+                                                            AV_ROUND_UP);
+            max_out_samples = std::min((int64_t)max_out_samples, estimated_out_samples);
+            out_samples = swr_convert(swrContext, &out, max_out_samples,
+                                      (const uint8_t**)frame->data, frame->nb_samples);
+            av_frame_unref(frame);
+        } else {
+            if (errorState) {
+                return false;
+            }
+            // Decoder drained: drain swr, then the stream is at its true end
+            if (swr_get_delay(swrContext, fileSampleRate) > 0) {
+                out_samples = swr_convert(swrContext, &out, max_out_samples, nullptr, 0);
+            }
+            if (out_samples == 0) {
+                eofReached = true;
+                return false;
+            }
+        }
+        
+        if (out_samples < 0) {
+            std::cerr << "Error converting audio samples: " << getFFmpegError(out_samples) << endl;
+            errorState = true;
+            return false;
+        }
+        
+        conversionBufferUsed = out_samples * fileChannels;
+        conversionBufferPos = 0;
+        decodedFrames += out_samples;
+    }
+    return true;
 }
 
 ////////////////////////////////////////////
@@ -380,83 +438,38 @@ void AudioFstream::read(char* buffer, size_t bytes)
         float* tempFloatBuffer = new float[resampledFloatsNeeded];
         size_t floatsResampled = 0;
         
-        while (floatsResampled < resampledFloatsNeeded && !eofReached) {
+        // Runs until soxr's own tail is out too, across as many reads as it
+        // takes: stopping on eofReached dropped the rest of the tail.
+        while (floatsResampled < resampledFloatsNeeded && !resamplerDrained) {
             // First, ensure we have decoded float data in conversionBuffer
-            while (conversionBufferPos >= conversionBufferUsed && !eofReached) {
-                // Need to decode more data
-                if (decodeNextFrame()) {
-                    // Convert decoded frame to float
-                    // Account for libswresample's internal buffering delay
-                    int64_t delay = swr_get_delay(swrContext, fileSampleRate);
-                    
-                    // Calculate max output samples: input samples + buffered samples
-                    int64_t estimated_out_samples = av_rescale_rnd(delay + frame->nb_samples,
-                                                                    fileSampleRate, fileSampleRate,
-                                                                    AV_ROUND_UP);
-                    int max_out_samples = std::min((int64_t)(conversionBufferSize / fileChannels),
-                                                    estimated_out_samples);
-                    
-                    uint8_t* out = (uint8_t*)conversionBuffer;
-                    int out_samples = swr_convert(swrContext, &out, max_out_samples,
-                                                 (const uint8_t**)frame->data, frame->nb_samples);
-                    
-                    if (out_samples < 0) {
-                        std::cerr << "Error converting audio samples" << endl;
-                        errorState = true;
-                        av_frame_unref(frame);
-                        break;
-                    }
-                    
-                    conversionBufferUsed = out_samples * fileChannels;
-                    conversionBufferPos = 0;
-                    av_frame_unref(frame);
-                } else {
-                    // EOF - drain remaining samples from swresample
-                    int64_t delay = swr_get_delay(swrContext, fileSampleRate);
-                    if (delay > 0) {
-                        int max_out_samples = conversionBufferSize / fileChannels;
-                        uint8_t* out = (uint8_t*)conversionBuffer;
-                        int out_samples = swr_convert(swrContext, &out, max_out_samples,
-                                                     nullptr, 0);  // NULL input to drain
-                        if (out_samples > 0) {
-                            conversionBufferUsed = out_samples * fileChannels;
-                            conversionBufferPos = 0;
-                            continue;  // Process drained samples
-                        }
-                    }
-                    break;  // EOF or error
-                }
+            refillConversionBuffer();
+            if (errorState) {
+                break;
             }
             
             if (conversionBufferPos >= conversionBufferUsed) {
-                // No more input data - if we're at EOF, drain the resampler
-                if (eofReached && floatsResampled < resampledFloatsNeeded) {
-                    // Drain libsoxr's internal buffer
-                    size_t outputFramesGenerated = 0;
-                    soxr_error_t soxr_err = soxr_process(resampler,
-                                                         nullptr, 0, nullptr,  // NULL input to drain
-                                                         tempFloatBuffer + floatsResampled, 
-                                                         framesNeeded - (floatsResampled / fileChannels), 
-                                                         &outputFramesGenerated);
-                    
-                    if (soxr_err) {
-                        std::cerr << "SOXR drain error: " << soxr_strerror(soxr_err) << endl;
-                        break;
-                    }
-                    
-                    floatsResampled += outputFramesGenerated * fileChannels;
-                    
-                    if (outputFramesGenerated == 0) {
-                        break;  // Fully drained
-                    }
-                } else {
-                    break;  // No more data available
+                // Decoder and swr are drained: drain libsoxr's internal buffer
+                size_t outputFramesGenerated = 0;
+                soxr_error_t soxr_err = soxr_process(resampler,
+                                                     nullptr, 0, nullptr,  // NULL input to drain
+                                                     tempFloatBuffer + floatsResampled, 
+                                                     framesNeeded - (floatsResampled / fileChannels), 
+                                                     &outputFramesGenerated);
+                
+                if (soxr_err) {
+                    std::cerr << "SOXR drain error: " << soxr_strerror(soxr_err) << endl;
+                    break;
+                }
+                
+                floatsResampled += outputFramesGenerated * fileChannels;
+                
+                if (outputFramesGenerated == 0) {
+                    resamplerDrained = true;  // Fully drained
                 }
             } else {
                 // Feed available float data to libsoxr
                 size_t floatsAvailable = conversionBufferUsed - conversionBufferPos;
                 size_t floatsToResample = std::min(floatsAvailable, resampledFloatsNeeded - floatsResampled);
-                size_t framesAvailable = floatsAvailable / fileChannels;
                 size_t framesInThisPass = floatsToResample / fileChannels;
                 
                 size_t inputFramesUsed = 0;
@@ -484,73 +497,16 @@ void AudioFstream::read(char* buffer, size_t bytes)
         
         // Copy resampled floats directly to output (JACK native format)
         size_t floatsToCopy = std::min(floatsResampled, samplesNeeded);
-        for (size_t i = 0; i < floatsToCopy; i++) {
-            outputPtr[i] = tempFloatBuffer[i];
-            lastBytesRead += 4;  // 4 bytes per float
-        }
-        
-        // Update current position based on how many samples we output
-        currentSamplePos += floatsToCopy;
+        memcpy(outputPtr, tempFloatBuffer, floatsToCopy * sizeof(float));
+        lastBytesRead += floatsToCopy * 4;  // 4 bytes per float
         
         delete[] tempFloatBuffer;
         
     } else {
         // No resampling - direct decode and output as float
-        while (bytesRemaining > 0 && !eofReached) {
+        while (bytesRemaining > 0) {
             // Ensure we have decoded float data
-            while (conversionBufferPos >= conversionBufferUsed && !eofReached) {
-                if (decodeNextFrame()) {
-                    // Convert decoded frame to float
-                    // Account for libswresample's internal buffering delay
-                    int64_t delay = swr_get_delay(swrContext, fileSampleRate);
-                    
-                    // Calculate max output samples: input samples + buffered samples
-                    int64_t estimated_out_samples = av_rescale_rnd(delay + frame->nb_samples,
-                                                                    fileSampleRate, fileSampleRate,
-                                                                    AV_ROUND_UP);
-                    int max_out_samples = std::min((int64_t)(conversionBufferSize / fileChannels),
-                                                    estimated_out_samples);
-                    
-                    uint8_t* out = (uint8_t*)conversionBuffer;
-                    int out_samples = swr_convert(swrContext, &out, max_out_samples,
-                                                 (const uint8_t**)frame->data, frame->nb_samples);
-                    
-                    if (out_samples < 0) {
-                        std::cerr << "Error converting audio samples: " << getFFmpegError(out_samples) << endl;
-                        errorState = true;
-                        av_frame_unref(frame);
-                        break;
-                    }
-                    
-                    // Debug: log conversion info for first few frames
-                    static int convert_count_no_resample = 0;
-                    if (convert_count_no_resample < 3) {
-                        std::cerr << "Converted " << out_samples << " samples to float (no resample, frame " << convert_count_no_resample << ")" << endl;
-                        convert_count_no_resample++;
-                    }
-                    
-                    conversionBufferUsed = out_samples * fileChannels;
-                    conversionBufferPos = 0;
-                    av_frame_unref(frame);
-                } else {
-                    // EOF - drain remaining samples from swresample
-                    int64_t delay = swr_get_delay(swrContext, fileSampleRate);
-                    if (delay > 0) {
-                        int max_out_samples = conversionBufferSize / fileChannels;
-                        uint8_t* out = (uint8_t*)conversionBuffer;
-                        int out_samples = swr_convert(swrContext, &out, max_out_samples,
-                                                     nullptr, 0);  // NULL input to drain
-                        if (out_samples > 0) {
-                            conversionBufferUsed = out_samples * fileChannels;
-                            conversionBufferPos = 0;
-                            continue;  // Process drained samples
-                        }
-                    }
-                    break;
-                }
-            }
-            
-            if (conversionBufferPos >= conversionBufferUsed) {
+            if (!refillConversionBuffer()) {
                 break;  // No more data
             }
             
@@ -618,8 +574,12 @@ void AudioFstream::seekg(long long pos, ios_base::seekdir dir)
     conversionBufferUsed = 0;
     conversionBufferPos = 0;
     
-    // Clear EOF flag
+    // Clear EOF and draining state
     eofReached = false;
+    demuxEof = false;
+    decoderDrained = false;
+    resamplerDrained = false;
+    decodedFrames = 0;
     
     // Reset resampler state if active (critical for looping/seeking)
     if (resamplingEnabled && resampler) {
@@ -668,6 +628,7 @@ void AudioFstream::clear()
 {
     errorState = false;
     eofReached = false;
+    resamplerDrained = false;
 }
 
 ////////////////////////////////////////////
@@ -709,6 +670,10 @@ void AudioFstream::close()
     
     fileOpen = false;
     eofReached = false;
+    demuxEof = false;
+    decoderDrained = false;
+    resamplerDrained = false;
+    decodedFrames = 0;
     errorState = false;
     fileChannels = 0;
     fileSampleRate = 0;
@@ -733,6 +698,11 @@ unsigned long long AudioFstream::getFileSize() const
     
     // No resampling - fileSize is already in output-channel bytes (see open())
     return fileSize;
+}
+
+int64_t AudioFstream::getDecodedFrames() const
+{
+    return decodedFrames;
 }
 
 unsigned int AudioFstream::getChannels() const
