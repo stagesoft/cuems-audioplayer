@@ -200,6 +200,10 @@ class AudioFstream
         uint64_t generation() const { return gen.load(); }
         int invariantViolations() const { return invViolations; }
         int soxrClearsOutsideWorker() const { return clearsOutsideWorker.load(); }
+        // Seek attempts beyond the first (the retry ladder of section 4.3a)
+        int seekRetryCount() const { return seekRetries.load(); }
+        // The last accepted SEEK landing's distance before its target (samples)
+        int64_t lastSeekLeadSamples() const { return lastSeekLead.load(); }
         const std::vector<float>& headCache() const { return cache; }
         bool seekStreamIsVideo() const { return seekStreamIndex != audioStreamIndex; }
         bool demuxDiscardsNonAudio() const { return discardSet; }
@@ -378,6 +382,8 @@ class AudioFstream
         std::atomic<bool> workerQuit;
         std::atomic<int> failNext;
         std::atomic<int> clearsOutsideWorker;
+        std::atomic<int> seekRetries;
+        std::atomic<int64_t> lastSeekLead;
         bool inWorker;               // written by the worker thread only
         std::function<void(JobKind, int)> stepHook;
         std::thread workerThread;

@@ -255,6 +255,73 @@ TEST_F(FeedEngine, WorkerSeekLandsOnTheLiveTarget) {
     }
 }
 
+// Seek acceptance (section 4.3a, the coordinator's decision on step 1's
+// item 7): a landing is accepted iff it leaves the codec its own pre-roll,
+// landing <= target - seek_preroll (3840 samples for Opus at 48 kHz). The
+// Opus and webm-Opus decode in the first 100 ms after the pickup matches a
+// linear decode of the same region. Opus does not converge bit-exactly in
+// 80 ms (casas, this chirp: up to 0.06 with 80 ms, 1e-5 with 160 ms, 0 with
+// 1 s), so the gate is the documented lossy tolerance (0.1, the AAC PNS one).
+TEST_F(FeedEngine, OpusSeekGetsItsPrerollAndConverges) {
+    std::mt19937 rng(3);
+    for (const char* n : {"a.opus", "a.weba"}) {
+        if (!find(n)) continue;
+        SCOPED_TRACE(n);
+        unsigned ch = 0;
+        const auto ref = linearDecode(fixturePath(n), &ch);
+        const long L = (long)(ref.size() / ch);
+        for (int k = 0; k < 6; k++) {
+            Rig g;
+            ASSERT_TRUE(g.open(fixturePath(n)));
+            g.s.setLoop(1, 0, 0);
+            std::uniform_int_distribution<long> d(g.s.cacheLength(), L - 2 * 48000);
+            const int64_t t = d(rng);
+            g.ctx.target = t;
+            g.s.start(t, A::StartKind::OFFSET);
+            for (int i = 0; i < 20 && g.s.ps() != A::Ps::PLAY; i++) {
+                g.tap.v.clear();
+                g.period();
+            }
+            ASSERT_EQ(g.s.ps(), A::Ps::PLAY);
+            for (int i = 0; i < 12; i++) g.period();                 // >= 100 ms of input below soxr
+            ASSERT_GE((long)(g.tap.v.size() / ch), 4800L);
+            const int64_t tol = std::string(n) == "a.weba" ? 48 : 0;   // webm's 1 ms index
+            EXPECT_GE(g.s.lastSeekLeadSamples(), 3840 - tol) << "seek to " << t;
+            const long off = contentOffset(g.tap.v, ref, ch, g.s.origin(), 2048, 60);
+            EXPECT_LE(std::labs(off), tol);
+            double maxd = 0;
+            for (long i = 0; i < 4800; i++)
+                for (unsigned c = 0; c < ch; c++)
+                    maxd = std::max(maxd, (double)std::fabs(g.tap.v[(size_t)i * ch + c] -
+                                                             ref[(size_t)(g.s.origin() + off + i) * ch + c]));
+            EXPECT_LE(maxd, 0.1) << "seek to " << t;
+            EXPECT_EQ(g.s.seekRetryCount(), 0);
+        }
+    }
+}
+
+// PCM (seek_preroll 0) is accepted at any landing <= target: never a retry.
+TEST_F(FeedEngine, PcmSeekNeverRetries) {
+    std::mt19937 rng(5);
+    for (const char* n : {"a.wav", "a_pcm.avi", "a_pcm.mov", "a_pcm.mkv", "a_44k.wav"}) {
+        const Fixture* f = find(n);
+        if (!f) continue;
+        SCOPED_TRACE(n);
+        for (int k = 0; k < 8; k++) {
+            Rig g;
+            ASSERT_TRUE(g.open(fixturePath(n)));
+            g.s.setLoop(1, 0, 0);
+            std::uniform_int_distribution<long> d(g.s.cacheLength(), f->ffprobeSum - 2 * f->rate);
+            const int64_t t = d(rng);
+            g.ctx.target = t;
+            g.s.start(t, A::StartKind::OFFSET);
+            ASSERT_TRUE(g.untilPlay());
+            EXPECT_EQ(g.s.seekRetryCount(), 0) << "seek to " << t;
+            EXPECT_GE(g.s.lastSeekLeadSamples(), std::string(n) == "a_pcm.mkv" ? -48 : 0);
+        }
+    }
+}
+
 // M4: a cue-less A/V matroska seeks on the audio index; an A/V mkv with
 // cues on its dense video index.
 TEST_F(FeedEngine, MatroskaSeekIndexByDensity) {

@@ -127,6 +127,8 @@ AudioFstream::AudioFstream( const string filename,
     workerQuit.store(false);
     failNext.store(0);
     clearsOutsideWorker.store(0);
+    seekRetries.store(0);
+    lastSeekLead.store(INT64_MIN);
     inWorker = false;
     semInit = false;
     resetFeedState();
@@ -1644,7 +1646,13 @@ bool AudioFstream::midFileSeek(const Job& j, JobResult& r)
     const int64_t tp = j.tPass;
     const int64_t s0 = std::max<int64_t>(0, tp - preroll);
     const int64_t gop2 = (int64_t)(2.0 * gopSeconds * fileSampleRate);
-    const int64_t msTol = isMatroska ? fileSampleRate / 1000 : 0;
+    const int64_t msTol = isMatroska ? fileSampleRate / 1000 : 0;   // matroska's 1 ms index
+    // Acceptance: the landing leaves the codec its own pre-roll before the
+    // target (seek_preroll, in samples: 0 for PCM and most codecs, 3840 for
+    // Opus at 48 kHz). `preroll` above is only the margin of the request.
+    // A target inside the codec's pre-roll from the start accepts sample 0.
+    const int64_t bound = std::max<int64_t>(0, tp - std::max<int64_t>(0, par->seek_preroll));
+    const bool videoIndex = (seekStreamIndex != audioStreamIndex);
     auto toTs = [&](int si, int64_t sample) -> int64_t {
         const int64_t base = (contentStartTs != AV_NOPTS_VALUE) ? contentStartTs :
                              (audioStartTime == AV_NOPTS_VALUE ? 0 : audioStartTime);
@@ -1654,13 +1662,15 @@ bool AudioFstream::midFileSeek(const Job& j, JobResult& r)
     struct Attempt { int si; int64_t at; };
     const Attempt attempts[3] = {
         {seekStreamIndex, s0},
-        {seekStreamIndex, std::max<int64_t>(0, tp - gop2)},   // landed after target - preroll: 2 GOPs earlier
+        // landed after the bound: 2 GOPs earlier (audio-only: 2 pre-rolls + 1 s earlier)
+        {seekStreamIndex, std::max<int64_t>(0, videoIndex ? tp - gop2 : tp - 2 * preroll - (int64_t)fileSampleRate)},
         {audioStreamIndex, s0},                                // then the audio index
     };
     bool landed = false;
     int64_t landing = 0;
     for (int a = 0; a < 3 && !landed; a++) {
         if (!stepOk(j, 1)) { r.status = JobStatus::ABANDONED; return false; }
+        if (a > 0) seekRetries.fetch_add(1);
         const Attempt& at = attempts[a];
         const int ret = avformat_seek_file(fc, at.si, INT64_MIN, toTs(at.si, at.at), toTs(at.si, std::max(at.at, tp)),
                                            AVSEEK_FLAG_BACKWARD);
@@ -1679,9 +1689,7 @@ bool AudioFstream::midFileSeek(const Job& j, JobResult& r)
             continue;
         }
         landing = nextSampleIndex();
-        if (landing <= at.at + msTol || landing <= tp) {
-            landed = landing <= tp + msTol;
-        }
+        landed = landing <= bound + msTol;
         if (!landed) {
             CuemsLogger::getLogger()->logWarning("Seek to " + std::to_string(tp) + " landed at " +
                                                  std::to_string(landing) + " (attempt " + std::to_string(a + 1) + ")");
@@ -1692,6 +1700,7 @@ bool AudioFstream::midFileSeek(const Job& j, JobResult& r)
     if (!landed) {
         return false;
     }
+    lastSeekLead.store(tp - landing);
     // 3: decode-and-discard to (live target mod P_s) - 1 period, re-reading the live target
     const int64_t lead = (int64_t)std::ceil(periodFramesFeed * rNom);
     const int64_t pp = (j.pS > 0 && j.pS < INF_SAMPLES) ? j.pS : INF_SAMPLES;
