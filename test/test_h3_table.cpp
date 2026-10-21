@@ -101,10 +101,22 @@ struct Rig {
     bool playing() const { return f->ps() == A::Ps::PLAY && f->outPlaying(); }
 
     // the four position states
-    void toHold() { /* following false, live */ }
-    void toPlay(double atMs = 100) { offsetTo(atMs); latch(OscEvent::MTCFOLLOW, 1); period(2); }
-    void toSeeking(double atMs = 3000) { runWorker = false; offsetTo(atMs); latch(OscEvent::MTCFOLLOW, 1); period(1); }
-    void toPastEnd() { offsetTo(FILE_S * 1000 + 800); latch(OscEvent::MTCFOLLOW, 1); period(2); }
+    // Each returns whether the state was reached; every call site asserts it, so a
+    // cell can never pass in a state other than its column.
+    bool toPlay(double atMs = 100) { offsetTo(atMs); latch(OscEvent::MTCFOLLOW, 1); period(2); return f->ps() == A::Ps::PLAY; }
+    bool toSeeking(double atMs = 3000)
+    {
+        runWorker = false; offsetTo(atMs); latch(OscEvent::MTCFOLLOW, 1); period(1);
+        return f->ps() == A::Ps::SEEKING;
+    }
+    // past the rig's real end (passes x P_s): needs a finite number of passes
+    bool toPastEnd()
+    {
+        const int64_t e = f->endSamples();
+        if (e >= INT64_MAX / 8) return false;
+        offsetTo((double)e * 1000.0 / RATE + 800); latch(OscEvent::MTCFOLLOW, 1); period(2);
+        return f->ps() == A::Ps::PASTEND;
+    }
     void freeze(double msec) { m.moving = false; ms(msec); }
 };
 
@@ -144,11 +156,11 @@ std::vector<Entry> table()
     // E2 /mtcfollow 1
     add("E2", P::HOLD, [] { Rig r; r.offsetTo(100); r.period(); EXPECT_EQ(r.f->ps(), A::Ps::HOLD);
         r.latch(OscEvent::MTCFOLLOW, 1); r.period(); EXPECT_TRUE(r.c->following()); EXPECT_EQ(r.f->ps(), A::Ps::PLAY); });
-    add("E2", P::PLAY, [] { Rig r; r.toPlay(); long s = r.c->starts(); r.latch(OscEvent::MTCFOLLOW, 1); r.period(3);
+    add("E2", P::PLAY, [] { Rig r; ASSERT_TRUE(r.toPlay()); long s = r.c->starts(); r.latch(OscEvent::MTCFOLLOW, 1); r.period(3);
         EXPECT_EQ(r.c->starts(), s); EXPECT_TRUE(r.playing()); });
-    add("E2", P::SEEKING, [] { Rig r; r.toSeeking(); uint64_t g = r.f->generation(); r.latch(OscEvent::MTCFOLLOW, 1); r.period();
+    add("E2", P::SEEKING, [] { Rig r; ASSERT_TRUE(r.toSeeking()); uint64_t g = r.f->generation(); r.latch(OscEvent::MTCFOLLOW, 1); r.period();
         EXPECT_EQ(r.f->ps(), A::Ps::SEEKING); EXPECT_EQ(r.f->generation(), g); });
-    add("E2", P::PASTEND, [] { Rig r; r.toPastEnd(); ASSERT_EQ(r.f->ps(), A::Ps::PASTEND);
+    add("E2", P::PASTEND, [] { Rig r; ASSERT_TRUE(r.toPastEnd()); ASSERT_EQ(r.f->ps(), A::Ps::PASTEND);
         r.latch(OscEvent::MTCFOLLOW, 0); r.period(); EXPECT_FALSE(r.c->following());
         r.latch(OscEvent::MTCFOLLOW, 1); r.period(); EXPECT_TRUE(r.c->following());   // T4
         EXPECT_EQ(r.f->ps(), A::Ps::PASTEND);                                         // target past the end: no re-enable
@@ -156,128 +168,130 @@ std::vector<Entry> table()
 
     // E3 /mtcfollow 0
     add("E3", P::HOLD, [] { Rig r; r.latch(OscEvent::MTCFOLLOW, 0); r.period(); EXPECT_FALSE(r.c->following()); EXPECT_EQ(r.f->ps(), A::Ps::HOLD); });
-    add("E3", P::PLAY, [] { Rig r; r.toPlay(); r.latch(OscEvent::MTCFOLLOW, 0); r.period();
+    add("E3", P::PLAY, [] { Rig r; ASSERT_TRUE(r.toPlay()); r.latch(OscEvent::MTCFOLLOW, 0); r.period();
         EXPECT_EQ(r.f->ps(), A::Ps::HOLD); EXPECT_FALSE(r.f->outPlaying()); EXPECT_FALSE(r.f->soxrPristine()); });
-    add("E3", P::SEEKING, [] { Rig r; r.toSeeking(); uint64_t g = r.f->generation(); r.latch(OscEvent::MTCFOLLOW, 0); r.period();
+    add("E3", P::SEEKING, [] { Rig r; ASSERT_TRUE(r.toSeeking()); uint64_t g = r.f->generation(); r.latch(OscEvent::MTCFOLLOW, 0); r.period();
         EXPECT_EQ(r.f->ps(), A::Ps::HOLD); EXPECT_GT(r.f->generation(), g);
         r.f->workerRunPending(); r.period(2); EXPECT_EQ(r.f->ps(), A::Ps::HOLD); });   // the abandoned result picks nothing up
-    add("E3", P::PASTEND, [] { Rig r; r.toPastEnd(); r.latch(OscEvent::MTCFOLLOW, 0); r.period();
+    add("E3", P::PASTEND, [] { Rig r; ASSERT_TRUE(r.toPastEnd()); r.latch(OscEvent::MTCFOLLOW, 0); r.period();
         EXPECT_FALSE(r.c->following()); EXPECT_EQ(r.f->ps(), A::Ps::PASTEND); });
 
     // E4 /offset, /offset_i
     add("E4", P::HOLD, [] { Rig r; r.latch(OscEvent::MTCFOLLOW, 1); r.offsetTo(-2000); r.period(2); EXPECT_EQ(r.f->ps(), A::Ps::HOLD);
         r.latch(OscEvent::OFFSET_I, (int32_t)std::floor(200 - (double)r.m.mtcNs / 1e6)); r.period(2);
         EXPECT_EQ(r.f->ps(), A::Ps::PLAY); ASSERT_GE(r.count(LogEvent::CACHE_START), 1); });
-    add("E4", P::PLAY, [] { Rig r; r.toPlay(); r.ms(200); r.clearLog(); r.offsetTo(300); r.period(4);   // into the head: RESET, cache start
+    add("E4", P::PLAY, [] { Rig r; ASSERT_TRUE(r.toPlay()); r.ms(200); r.clearLog(); r.offsetTo(300); r.period(4);   // into the head: RESET, cache start
         EXPECT_EQ(r.f->ps(), A::Ps::PLAY); EXPECT_EQ(r.count(LogEvent::CACHE_START), 1);
         r.offsetTo(-500); r.period(); EXPECT_EQ(r.f->ps(), A::Ps::HOLD); });                            // t < 0: h.4 step 0
-    add("E4", P::SEEKING, [] { Rig r; r.toSeeking(); uint64_t g = r.f->generation(); r.offsetTo(200); r.period();
+    add("E4", P::SEEKING, [] { Rig r; ASSERT_TRUE(r.toSeeking()); uint64_t g = r.f->generation(); r.offsetTo(200); r.period();
         EXPECT_GT(r.f->generation(), g); EXPECT_EQ(r.f->ps(), A::Ps::SEEKING);
         r.runWorker = true; r.period(4); EXPECT_EQ(r.f->ps(), A::Ps::PLAY); EXPECT_EQ(r.f->feed(), A::Feed::CACHE); });
-    add("E4", P::PASTEND, [] { Rig r; r.toPastEnd(); r.offsetTo(1000); r.period(3); EXPECT_EQ(r.f->ps(), A::Ps::PLAY); });
+    add("E4", P::PASTEND, [] { Rig r; ASSERT_TRUE(r.toPastEnd()); r.offsetTo(1000); r.period(3); EXPECT_EQ(r.f->ps(), A::Ps::PLAY); });
 
     // E5 /loop
     add("E5", P::HOLD, [] { Rig r; r.loop(-1); r.period(); EXPECT_EQ(r.f->loopMode(), A::LoopMode::WRAP); EXPECT_GE(r.count(LogEvent::MODE), 1); });
-    add("E5", P::PLAY, [] { Rig r(-1); r.toPlay(); r.loop(1); r.period(); EXPECT_EQ(r.f->loopMode(), A::LoopMode::ONCE); EXPECT_TRUE(r.playing()); });
-    add("E5", P::SEEKING, [] { Rig r; r.toSeeking(); r.loop(3); r.period(); EXPECT_EQ(r.f->loopMode(), A::LoopMode::WRAP); EXPECT_EQ(r.f->ps(), A::Ps::SEEKING); });
-    add("E5", P::PASTEND, [] { Rig r; r.toPastEnd(); r.loop(3); r.period(4);   // passes increased since the end: re-enable
+    add("E5", P::PLAY, [] { Rig r(-1); ASSERT_TRUE(r.toPlay()); r.loop(1); r.period(); EXPECT_EQ(r.f->loopMode(), A::LoopMode::ONCE); EXPECT_TRUE(r.playing()); });
+    add("E5", P::SEEKING, [] { Rig r; ASSERT_TRUE(r.toSeeking()); r.loop(3); r.period(); EXPECT_EQ(r.f->loopMode(), A::LoopMode::WRAP); EXPECT_EQ(r.f->ps(), A::Ps::SEEKING); });
+    add("E5", P::PASTEND, [] { Rig r; ASSERT_TRUE(r.toPastEnd()); r.loop(3); r.period(4);   // passes increased since the end: re-enable
         EXPECT_NE(r.f->ps(), A::Ps::PASTEND); });
 
     // E6 an anchored tick while LOST / INVALID and the head moves
-    add("E6", P::HOLD, [] { Rig r; r.toPlay(); r.freeze(200); ASSERT_EQ(r.c->mtc(), Mtc::LOST); ASSERT_EQ(r.f->ps(), A::Ps::HOLD);
+    add("E6", P::HOLD, [] { Rig r; ASSERT_TRUE(r.toPlay()); r.freeze(200); ASSERT_EQ(r.c->mtc(), Mtc::LOST); ASSERT_EQ(r.f->ps(), A::Ps::HOLD);
         r.m.moving = true; r.period(2); EXPECT_EQ(r.c->mtc(), Mtc::LIVE); r.period(4); EXPECT_EQ(r.f->ps(), A::Ps::PLAY);
         EXPECT_GE(r.count(LogEvent::MTC_RETURN), 1); });
-    add("E6", P::PLAY, [] { Rig r; r.toPlay(); for (int i = 0; i < 200; i++) { r.period(); if (r.playing()) ASSERT_TRUE(r.c->mtc() == Mtc::LIVE || r.c->mtc() == Mtc::SUSPENDED); } });
-    add("E6", P::SEEKING, [] { Rig r; r.toSeeking(); r.freeze(200); EXPECT_EQ(r.f->ps(), A::Ps::HOLD); });   // E7 leaves SEEKING first
-    add("E6", P::PASTEND, [] { Rig r; r.toPastEnd(); r.freeze(200); EXPECT_EQ(r.c->mtc(), Mtc::LOST); r.m.moving = true; r.period(2);
+    add("E6", P::PLAY, [] { Rig r; ASSERT_TRUE(r.toPlay()); for (int i = 0; i < 200; i++) { r.period(); if (r.playing()) ASSERT_TRUE(r.c->mtc() == Mtc::LIVE || r.c->mtc() == Mtc::SUSPENDED); } });
+    add("E6", P::SEEKING, [] { Rig r; ASSERT_TRUE(r.toSeeking()); r.freeze(200); EXPECT_EQ(r.f->ps(), A::Ps::HOLD); });   // E7 leaves SEEKING first
+    add("E6", P::PASTEND, [] { Rig r; ASSERT_TRUE(r.toPastEnd()); r.freeze(200); EXPECT_EQ(r.c->mtc(), Mtc::LOST); r.m.moving = true; r.period(2);
         EXPECT_EQ(r.c->mtc(), Mtc::LIVE); EXPECT_EQ(r.f->ps(), A::Ps::PASTEND); });
 
     // E7 the head frozen for 150 ms
     add("E7", P::HOLD, [] { Rig r; r.freeze(200); EXPECT_EQ(r.c->mtc(), Mtc::LOST); EXPECT_EQ(r.count(LogEvent::MTC_INVALID), 0); });
-    add("E7", P::PLAY, [] { Rig r; r.toPlay(); r.m.moving = false; int k = 0; while (r.playing() && k++ < 30) r.period();
+    add("E7", P::PLAY, [] { Rig r; ASSERT_TRUE(r.toPlay()); r.m.moving = false; int k = 0; while (r.playing() && k++ < 30) r.period();
         EXPECT_EQ(r.c->mtc(), Mtc::LOST); EXPECT_EQ(r.f->ps(), A::Ps::HOLD); EXPECT_LE(k * P_NS / 1000000, 150 + 2 * P_NS / 1000000);
         const double I = r.c->loop().integral(); r.period(5); EXPECT_EQ(r.c->loop().integral(), I); });   // u frozen, I kept
-    add("E7", P::SEEKING, [] { Rig r; r.toSeeking(); uint64_t g = r.f->generation(); r.freeze(200);
+    add("E7", P::SEEKING, [] { Rig r; ASSERT_TRUE(r.toSeeking()); uint64_t g = r.f->generation(); r.freeze(200);
         EXPECT_EQ(r.f->ps(), A::Ps::HOLD); EXPECT_GT(r.f->generation(), g); });
-    add("E7", P::PASTEND, [] { Rig r; r.toPastEnd(); r.freeze(200); EXPECT_EQ(r.c->mtc(), Mtc::LOST); EXPECT_EQ(r.f->ps(), A::Ps::PASTEND); });
+    add("E7", P::PASTEND, [] { Rig r; ASSERT_TRUE(r.toPastEnd()); r.freeze(200); EXPECT_EQ(r.c->mtc(), Mtc::LOST); EXPECT_EQ(r.f->ps(), A::Ps::PASTEND); });
 
     // E8 invalid: 800 ms moving without an anchored tick; ERROR once
     auto invalid = [](Rig& r) { r.m.anchored = false; r.ms(900); };
     add("E8", P::HOLD, [=] { Rig r; invalid(r); EXPECT_EQ(r.c->mtc(), Mtc::INVALID); EXPECT_EQ(r.count(LogEvent::MTC_INVALID), 1); });
-    add("E8", P::PLAY, [=] { Rig r; r.toPlay(); invalid(r); EXPECT_EQ(r.f->ps(), A::Ps::HOLD); EXPECT_FALSE(r.f->outPlaying());
+    add("E8", P::PLAY, [=] { Rig r; ASSERT_TRUE(r.toPlay()); invalid(r); EXPECT_EQ(r.f->ps(), A::Ps::HOLD); EXPECT_FALSE(r.f->outPlaying());
         EXPECT_EQ(r.count(LogEvent::MTC_INVALID), 1); r.ms(900); EXPECT_EQ(r.count(LogEvent::MTC_INVALID), 1); });
-    add("E8", P::SEEKING, [=] { Rig r; r.toSeeking(); invalid(r); EXPECT_EQ(r.f->ps(), A::Ps::HOLD); });
-    add("E8", P::PASTEND, [=] { Rig r; r.toPastEnd(); invalid(r); EXPECT_EQ(r.c->mtc(), Mtc::INVALID); EXPECT_EQ(r.f->ps(), A::Ps::PASTEND); });
+    add("E8", P::SEEKING, [=] { Rig r; ASSERT_TRUE(r.toSeeking()); invalid(r); EXPECT_EQ(r.f->ps(), A::Ps::HOLD); });
+    add("E8", P::PASTEND, [=] { Rig r; ASSERT_TRUE(r.toPastEnd()); invalid(r); EXPECT_EQ(r.c->mtc(), Mtc::INVALID); EXPECT_EQ(r.f->ps(), A::Ps::PASTEND); });
 
     // E9 the trusted tick's age crosses 20 ms
     auto suspend = [](Rig& r) { r.m.fresh = false; r.period(3); };
     add("E9", P::HOLD, [=] { Rig r; suspend(r); EXPECT_EQ(r.c->mtc(), Mtc::SUSPENDED); r.m.fresh = true; r.period(); EXPECT_EQ(r.c->mtc(), Mtc::LIVE); });
-    add("E9", P::PLAY, [=] { Rig r; r.toPlay(); r.ms(500); suspend(r);
+    add("E9", P::PLAY, [=] { Rig r; ASSERT_TRUE(r.toPlay()); r.ms(500); suspend(r);
         ASSERT_EQ(r.c->mtc(), Mtc::SUSPENDED); const double u = r.c->loop().u(); r.period(5);
         EXPECT_TRUE(r.playing()); EXPECT_EQ(r.c->loop().u(), u); });   // the loop holds while SUSPENDED
-    add("E9", P::SEEKING, [=] { Rig r; r.toSeeking(); suspend(r); EXPECT_EQ(r.c->mtc(), Mtc::SUSPENDED); EXPECT_EQ(r.f->ps(), A::Ps::SEEKING); });
-    add("E9", P::PASTEND, [=] { Rig r; r.toPastEnd(); suspend(r); EXPECT_EQ(r.c->mtc(), Mtc::SUSPENDED); });
+    add("E9", P::SEEKING, [=] { Rig r; ASSERT_TRUE(r.toSeeking()); suspend(r); EXPECT_EQ(r.c->mtc(), Mtc::SUSPENDED); EXPECT_EQ(r.f->ps(), A::Ps::SEEKING); });
+    add("E9", P::PASTEND, [=] { Rig r; ASSERT_TRUE(r.toPastEnd()); suspend(r); EXPECT_EQ(r.c->mtc(), Mtc::SUSPENDED); });
 
     // E10 raw error > 80 ms on 3 periods (PLAY, not SETTLE, LIVE)
     auto jump = [](Rig& r, double msec) { r.m.mtcNs += (int64_t)(msec * 1e6); };
-    add("E10", P::PLAY, [=] { Rig r; r.toPlay(); r.ms(300); r.clearLog(); jump(r, 200); r.period(5);
+    add("E10", P::PLAY, [=] { Rig r; ASSERT_TRUE(r.toPlay()); r.ms(300); r.clearLog(); jump(r, 200); r.period(5);
         EXPECT_EQ(r.count(LogEvent::RESYNC), 1); EXPECT_TRUE(r.playing()); EXPECT_EQ(r.c->resyncs(), 1); });
     for (P ps : {P::HOLD, P::SEEKING, P::PASTEND}) add("E10", ps, [=] { Rig r;
-        if (ps == P::SEEKING) r.toSeeking(); if (ps == P::PASTEND) r.toPastEnd(); jump(r, 200); r.period(5);
+        if (ps == P::SEEKING) ASSERT_TRUE(r.toSeeking()); if (ps == P::PASTEND) ASSERT_TRUE(r.toPastEnd()); jump(r, 200); r.period(5);
         EXPECT_EQ(r.count(LogEvent::RESYNC), 0); });
 
     // E11 FIFO out of band: unreachable with demand feeding; asserted silent in every state
-    for (P ps : STATES) add("E11", ps, [=] { Rig r(-1); if (ps == P::PLAY) r.toPlay(); if (ps == P::SEEKING) r.toSeeking();
-        if (ps == P::PASTEND) r.toPastEnd(); r.ms(3000); EXPECT_EQ(r.count(LogEvent::FIFO_DRIFT), 0); });
+    for (P ps : STATES) add("E11", ps, [=] { Rig r(ps == P::PASTEND ? 1 : -1); if (ps == P::PLAY) ASSERT_TRUE(r.toPlay()); if (ps == P::SEEKING) ASSERT_TRUE(r.toSeeking());
+        if (ps == P::PASTEND) ASSERT_TRUE(r.toPastEnd()); r.ms(3000); EXPECT_EQ(r.count(LogEvent::FIFO_DRIFT), 0); });
 
     // E12 the pass boundary with wraps left: PLAY only (no feed elsewhere)
-    add("E12", P::PLAY, [] { Rig r(-1); r.toPlay(); r.ms(FILE_S * 1000 * 2 + 500); EXPECT_EQ(r.f->passIndex(), 2); EXPECT_TRUE(r.playing());
+    add("E12", P::PLAY, [] { Rig r(-1); ASSERT_TRUE(r.toPlay()); r.ms(FILE_S * 1000 * 2 + 500); EXPECT_EQ(r.f->passIndex(), 2); EXPECT_TRUE(r.playing());
         EXPECT_EQ(r.c->starts(), 1); });
-    for (P ps : {P::HOLD, P::SEEKING, P::PASTEND}) add("E12", ps, [=] { Rig r(-1);
-        if (ps == P::SEEKING) r.toSeeking(); if (ps == P::PASTEND) r.toPastEnd(); r.ms(FILE_S * 1000 + 500); EXPECT_EQ(r.f->passIndex(), ps == P::PASTEND ? r.f->passIndex() : 0); });
+    for (P ps : {P::HOLD, P::SEEKING, P::PASTEND}) add("E12", ps, [=] { Rig r(ps == P::PASTEND ? 1 : -1);
+        if (ps == P::SEEKING) ASSERT_TRUE(r.toSeeking()); if (ps == P::PASTEND) ASSERT_TRUE(r.toPastEnd());
+        const int64_t pi0 = r.f->passIndex(); r.ms(FILE_S * 1000 + 500);
+        EXPECT_EQ(r.f->passIndex(), pi0); EXPECT_EQ(r.f->ps(), ps); });
 
     // E13 the end: PLAY drains, a SEEK whose chase crossed the end ends too
-    add("E13", P::PLAY, [] { Rig r; r.toPlay(); r.ms(FILE_S * 1000 + 300); EXPECT_EQ(r.f->ps(), A::Ps::PASTEND); EXPECT_EQ(r.f->feed(), A::Feed::ENDED);
+    add("E13", P::PLAY, [] { Rig r; ASSERT_TRUE(r.toPlay()); r.ms(FILE_S * 1000 + 300); EXPECT_EQ(r.f->ps(), A::Ps::PASTEND); EXPECT_EQ(r.f->feed(), A::Feed::ENDED);
         EXPECT_EQ(r.count(LogEvent::END), 1); });
-    add("E13", P::SEEKING, [] { Rig r; r.toSeeking(4900); r.ms(300); r.runWorker = true; r.period(3); EXPECT_EQ(r.f->ps(), A::Ps::PASTEND); });
-    for (P ps : {P::HOLD, P::PASTEND}) add("E13", ps, [=] { Rig r; if (ps == P::PASTEND) r.toPastEnd(); r.ms(500); EXPECT_EQ(r.count(LogEvent::END), 0); });
+    add("E13", P::SEEKING, [] { Rig r; ASSERT_TRUE(r.toSeeking(4900)); r.ms(300); r.runWorker = true; r.period(3); EXPECT_EQ(r.f->ps(), A::Ps::PASTEND); });
+    for (P ps : {P::HOLD, P::PASTEND}) add("E13", ps, [=] { Rig r; if (ps == P::PASTEND) ASSERT_TRUE(r.toPastEnd()); r.ms(500); EXPECT_EQ(r.count(LogEvent::END), 0); });
 
     // E14 the handover at H (PLAY only)
-    add("E14", P::PLAY, [] { Rig r; r.toPlay(); r.ms(1300); EXPECT_EQ(r.f->feed(), A::Feed::DECODER); EXPECT_EQ(r.count(LogEvent::HANDOVER_LATE), 0); });
-    for (P ps : {P::HOLD, P::SEEKING, P::PASTEND}) add("E14", ps, [=] { Rig r; if (ps == P::SEEKING) r.toSeeking(); if (ps == P::PASTEND) r.toPastEnd();
+    add("E14", P::PLAY, [] { Rig r; ASSERT_TRUE(r.toPlay()); r.ms(1300); EXPECT_EQ(r.f->feed(), A::Feed::DECODER); EXPECT_EQ(r.count(LogEvent::HANDOVER_LATE), 0); });
+    for (P ps : {P::HOLD, P::SEEKING, P::PASTEND}) add("E14", ps, [=] { Rig r; if (ps == P::SEEKING) ASSERT_TRUE(r.toSeeking()); if (ps == P::PASTEND) ASSERT_TRUE(r.toPastEnd());
         r.ms(1300); EXPECT_NE(r.f->feed(), A::Feed::DECODER); });
 
     // E15 job done
-    add("E15", P::HOLD, [] { Rig r; r.toPlay(); r.ms(100); r.offsetTo(-500); r.period(3);   // step 0: RESET in HOLD
+    add("E15", P::HOLD, [] { Rig r; ASSERT_TRUE(r.toPlay()); r.ms(100); r.offsetTo(-500); r.period(3);   // step 0: RESET in HOLD
         EXPECT_EQ(r.f->ps(), A::Ps::HOLD); EXPECT_TRUE(r.f->soxrPristine()); EXPECT_TRUE(r.f->decAtH()); });
-    add("E15", P::PLAY, [] { Rig r(-1); r.toPlay(); r.ms(FILE_S * 1000 + 100); EXPECT_EQ(r.f->passIndex(), 1); EXPECT_TRUE(r.playing()); });   // WRAP done
-    add("E15", P::SEEKING, [] { Rig r; r.toSeeking(); r.runWorker = true; r.period(3); EXPECT_EQ(r.f->ps(), A::Ps::PLAY);
+    add("E15", P::PLAY, [] { Rig r(-1); ASSERT_TRUE(r.toPlay()); r.ms(FILE_S * 1000 + 100); EXPECT_EQ(r.f->passIndex(), 1); EXPECT_TRUE(r.playing()); });   // WRAP done
+    add("E15", P::SEEKING, [] { Rig r; ASSERT_TRUE(r.toSeeking()); r.runWorker = true; r.period(3); EXPECT_EQ(r.f->ps(), A::Ps::PLAY);
         EXPECT_EQ(r.count(LogEvent::SEEK_PICKUP), 1); });
-    add("E15", P::PASTEND, [] { Rig r; r.toPlay(); r.ms(FILE_S * 1000 + 300); EXPECT_EQ(r.f->ps(), A::Ps::PASTEND); EXPECT_TRUE(r.f->soxrPristine()); });
+    add("E15", P::PASTEND, [] { Rig r; ASSERT_TRUE(r.toPlay()); r.ms(FILE_S * 1000 + 300); EXPECT_EQ(r.f->ps(), A::Ps::PASTEND); EXPECT_TRUE(r.f->soxrPristine()); });
 
     // E16 job failed
-    add("E16", P::HOLD, [] { Rig r; r.toPlay(); r.ms(100); r.f->failNextJob(A::JobKind::RESET); r.offsetTo(-500); r.period(3);
+    add("E16", P::HOLD, [] { Rig r; ASSERT_TRUE(r.toPlay()); r.ms(100); r.f->failNextJob(A::JobKind::RESET); r.offsetTo(-500); r.period(3);
         EXPECT_EQ(r.count(LogEvent::RESET_FAILED), 1); EXPECT_EQ(r.f->ps(), A::Ps::HOLD); });
-    add("E16", P::PLAY, [] { Rig r(-1); r.f->failNextJob(A::JobKind::WRAP); r.toPlay(); r.ms(FILE_S * 1000 + 1500);
+    add("E16", P::PLAY, [] { Rig r(-1); r.f->failNextJob(A::JobKind::WRAP); ASSERT_TRUE(r.toPlay()); r.ms(FILE_S * 1000 + 1500);
         EXPECT_EQ(r.f->loopMode(), A::LoopMode::OFF); EXPECT_EQ(r.f->ps(), A::Ps::PASTEND); EXPECT_EQ(r.count(LogEvent::WRAP_FAILED), 1); });
-    add("E16", P::SEEKING, [] { Rig r; r.f->failNextJob(A::JobKind::SEEK); r.toSeeking(); r.runWorker = true; r.period(3);
+    add("E16", P::SEEKING, [] { Rig r; r.f->failNextJob(A::JobKind::SEEK); ASSERT_TRUE(r.toSeeking()); r.runWorker = true; r.period(3);
         EXPECT_EQ(r.count(LogEvent::SEEK_FAILED), 1); EXPECT_EQ(r.f->ps(), A::Ps::SEEKING); r.ms(1200); EXPECT_EQ(r.f->ps(), A::Ps::PLAY); });
-    add("E16", P::PASTEND, [] { Rig r; r.toPlay(); r.ms(FILE_S * 1000 - 500); r.f->failNextJob(A::JobKind::RESET); r.ms(800);
+    add("E16", P::PASTEND, [] { Rig r; ASSERT_TRUE(r.toPlay()); r.ms(FILE_S * 1000 - 500); r.f->failNextJob(A::JobKind::RESET); r.ms(800);
         EXPECT_EQ(r.f->ps(), A::Ps::PASTEND); EXPECT_EQ(r.count(LogEvent::RESET_FAILED), 1); });
 
     // E17 a job superseded
-    add("E17", P::HOLD, [] { Rig r; r.toSeeking(); r.latch(OscEvent::MTCFOLLOW, 0); r.period(); r.f->workerRunPending(); r.period(2);
+    add("E17", P::HOLD, [] { Rig r; ASSERT_TRUE(r.toSeeking()); r.latch(OscEvent::MTCFOLLOW, 0); r.period(); r.f->workerRunPending(); r.period(2);
         EXPECT_EQ(r.f->ps(), A::Ps::HOLD); EXPECT_EQ(r.count(LogEvent::SEEK_PICKUP), 0); });
-    add("E17", P::PLAY, [] { Rig r(-1); r.blockWrap = true; r.toPlay(); r.ms(FILE_S * 1000 + 100); ASSERT_EQ(r.f->runningOrPendingJob(), A::JobKind::WRAP);
+    add("E17", P::PLAY, [] { Rig r(-1); r.blockWrap = true; ASSERT_TRUE(r.toPlay()); r.ms(FILE_S * 1000 + 100); ASSERT_EQ(r.f->runningOrPendingJob(), A::JobKind::WRAP);
         r.blockWrap = false; r.offsetTo(FILE_S * 1000 + 3000); r.period(5); EXPECT_EQ(r.f->ps(), A::Ps::PLAY); EXPECT_EQ(r.count(LogEvent::HANDOVER_LATE), 0); });
-    add("E17", P::SEEKING, [] { Rig r; r.toSeeking(); r.offsetTo(2500); r.period(); r.runWorker = true; r.period(4); EXPECT_EQ(r.f->ps(), A::Ps::PLAY); });
-    add("E17", P::PASTEND, [] { Rig r; r.toPlay(); r.ms(FILE_S * 1000 + 100); r.runWorker = false; r.ms(200); r.loop(2); r.offsetTo(500); r.period(); r.runWorker = true; r.period(5);
+    add("E17", P::SEEKING, [] { Rig r; ASSERT_TRUE(r.toSeeking()); r.offsetTo(2500); r.period(); r.runWorker = true; r.period(4); EXPECT_EQ(r.f->ps(), A::Ps::PLAY); });
+    add("E17", P::PASTEND, [] { Rig r; ASSERT_TRUE(r.toPlay()); r.ms(FILE_S * 1000 + 100); r.runWorker = false; r.ms(200); r.loop(2); r.offsetTo(500); r.period(); r.runWorker = true; r.period(5);
         EXPECT_EQ(r.f->ps(), A::Ps::PLAY); });
 
     // E18 late handover (PLAY only)
-    add("E18", P::PLAY, [] { Rig r(-1); r.blockWrap = true; r.toPlay(); r.ms(FILE_S * 1000 + 1200); EXPECT_GE(r.count(LogEvent::HANDOVER_LATE), 1);
+    add("E18", P::PLAY, [] { Rig r(-1); r.blockWrap = true; ASSERT_TRUE(r.toPlay()); r.ms(FILE_S * 1000 + 1200); EXPECT_GE(r.count(LogEvent::HANDOVER_LATE), 1);
         r.blockWrap = false; r.period(5); EXPECT_EQ(r.f->ps(), A::Ps::PLAY); });
-    for (P ps : {P::HOLD, P::SEEKING, P::PASTEND}) add("E18", ps, [=] { Rig r(-1); if (ps == P::SEEKING) r.toSeeking(); if (ps == P::PASTEND) r.toPastEnd();
+    for (P ps : {P::HOLD, P::SEEKING, P::PASTEND}) add("E18", ps, [=] { Rig r(ps == P::PASTEND ? 1 : -1); if (ps == P::SEEKING) ASSERT_TRUE(r.toSeeking()); if (ps == P::PASTEND) ASSERT_TRUE(r.toPastEnd());
         r.blockWrap = true; r.ms(FILE_S * 1000 + 1200); EXPECT_EQ(r.count(LogEvent::HANDOVER_LATE), 0); });
 
     // E19 /quit and E20 /load are the main loop's and the OSC thread's (any state)
@@ -285,35 +299,35 @@ std::vector<Entry> table()
     for (P ps : STATES) add("E20", ps, [] { SUCCEED() << "/load is refused by the OSC thread while a stream is open (K4)"; });
 
     // E21 the drain completed (PASTEND only)
-    add("E21", P::PASTEND, [] { Rig r; r.toPlay(); r.ms(FILE_S * 1000 + 300); EXPECT_EQ(r.f->feed(), A::Feed::ENDED);
+    add("E21", P::PASTEND, [] { Rig r; ASSERT_TRUE(r.toPlay()); r.ms(FILE_S * 1000 + 300); EXPECT_EQ(r.f->feed(), A::Feed::ENDED);
         EXPECT_GE(r.count(LogEvent::END_WAIT), 1); EXPECT_TRUE(r.f->soxrPristine()); });
-    for (P ps : {P::HOLD, P::PLAY, P::SEEKING}) add("E21", ps, [=] { Rig r; if (ps == P::PLAY) r.toPlay(); if (ps == P::SEEKING) r.toSeeking();
+    for (P ps : {P::HOLD, P::PLAY, P::SEEKING}) add("E21", ps, [=] { Rig r; if (ps == P::PLAY) ASSERT_TRUE(r.toPlay()); if (ps == P::SEEKING) ASSERT_TRUE(r.toSeeking());
         r.ms(500); EXPECT_EQ(r.count(LogEvent::END_WAIT), 0); });
 
     // E22 the safety-net end (PLAY, LIVE): target > endEff + 80 ms, before E10's 3 periods
-    add("E22", P::PLAY, [=] { Rig r(2); r.toPlay(); r.ms(500); jump(r, 2 * FILE_S * 1000 + 500); r.period(2);
+    add("E22", P::PLAY, [=] { Rig r(2); ASSERT_TRUE(r.toPlay()); r.ms(500); jump(r, 2 * FILE_S * 1000 + 500); r.period(2);
         EXPECT_EQ(r.count(LogEvent::SAFETY_END), 1); EXPECT_EQ(r.f->ps(), A::Ps::PASTEND); EXPECT_EQ(r.count(LogEvent::RESYNC), 0); });
-    for (P ps : {P::HOLD, P::SEEKING, P::PASTEND}) add("E22", ps, [=] { Rig r(2); if (ps == P::SEEKING) r.toSeeking(); if (ps == P::PASTEND) r.toPastEnd();
+    for (P ps : {P::HOLD, P::SEEKING, P::PASTEND}) add("E22", ps, [=] { Rig r(2); if (ps == P::SEEKING) ASSERT_TRUE(r.toSeeking()); if (ps == P::PASTEND) ASSERT_TRUE(r.toPastEnd());
         jump(r, 2 * FILE_S * 1000 + 500); r.period(3); EXPECT_EQ(r.count(LogEvent::SAFETY_END), 0); });
 
     // E23 the target crosses 0 upward
     add("E23", P::HOLD, [] { Rig r; r.latch(OscEvent::MTCFOLLOW, 1); r.offsetTo(-100); r.period(); EXPECT_EQ(r.f->ps(), A::Ps::HOLD);
         r.ms(150); EXPECT_EQ(r.f->ps(), A::Ps::PLAY); });
-    for (P ps : {P::PLAY, P::SEEKING, P::PASTEND}) add("E23", ps, [=] { Rig r; if (ps == P::PLAY) r.toPlay(); if (ps == P::SEEKING) r.toSeeking();
-        if (ps == P::PASTEND) r.toPastEnd(); const A::Ps before = r.f->ps(); r.period(); EXPECT_EQ(r.f->ps(), before); });
+    for (P ps : {P::PLAY, P::SEEKING, P::PASTEND}) add("E23", ps, [=] { Rig r; if (ps == P::PLAY) ASSERT_TRUE(r.toPlay()); if (ps == P::SEEKING) ASSERT_TRUE(r.toSeeking());
+        if (ps == P::PASTEND) ASSERT_TRUE(r.toPastEnd()); const A::Ps before = r.f->ps(); r.period(); EXPECT_EQ(r.f->ps(), before); });
 
     // E24 the first EOF
-    add("E24", P::PLAY, [] { Rig r(-1); r.toPlay(); EXPECT_EQ(r.f->decodedLength(), -1); r.ms(FILE_S * 1000 + 100);
+    add("E24", P::PLAY, [] { Rig r(-1); ASSERT_TRUE(r.toPlay()); EXPECT_EQ(r.f->decodedLength(), -1); r.ms(FILE_S * 1000 + 100);
         EXPECT_EQ(r.f->decodedLength(), (int64_t)FILE_S * RATE); });
-    for (P ps : {P::HOLD, P::SEEKING, P::PASTEND}) add("E24", ps, [=] { Rig r; if (ps == P::SEEKING) r.toSeeking(); if (ps == P::PASTEND) r.toPastEnd();
+    for (P ps : {P::HOLD, P::SEEKING, P::PASTEND}) add("E24", ps, [=] { Rig r; if (ps == P::SEEKING) ASSERT_TRUE(r.toSeeking()); if (ps == P::PASTEND) ASSERT_TRUE(r.toPastEnd());
         r.ms(300); SUCCEED(); });
 
     // E25 /play, /stop and E26 /stoponlost: refused / ignored with a WARNING once, any state
     for (P ps : STATES) {
-        add("E25", ps, [=] { Rig r; if (ps == P::PLAY) r.toPlay(); if (ps == P::SEEKING) r.toSeeking(); if (ps == P::PASTEND) r.toPastEnd();
+        add("E25", ps, [=] { Rig r; if (ps == P::PLAY) ASSERT_TRUE(r.toPlay()); if (ps == P::SEEKING) ASSERT_TRUE(r.toSeeking()); if (ps == P::PASTEND) ASSERT_TRUE(r.toPastEnd());
             const A::Ps before = r.f->ps(); r.latch(OscEvent::PLAY_STOP); r.latch(OscEvent::PLAY_STOP); r.period();
             EXPECT_EQ(r.count(LogEvent::PLAY_STOP_REFUSED), 1); EXPECT_EQ(r.f->ps(), before); });
-        add("E26", ps, [=] { Rig r; if (ps == P::PLAY) r.toPlay(); if (ps == P::SEEKING) r.toSeeking(); if (ps == P::PASTEND) r.toPastEnd();
+        add("E26", ps, [=] { Rig r; if (ps == P::PLAY) ASSERT_TRUE(r.toPlay()); if (ps == P::SEEKING) ASSERT_TRUE(r.toSeeking()); if (ps == P::PASTEND) ASSERT_TRUE(r.toPastEnd());
             const A::Ps before = r.f->ps(); r.latch(OscEvent::STOPONLOST, 0); r.latch(OscEvent::STOPONLOST, 1); r.period();
             EXPECT_EQ(r.count(LogEvent::STOPONLOST_IGNORED), 1); EXPECT_EQ(r.f->ps(), before); });
     }
