@@ -93,6 +93,16 @@ class AudioFstream
         // this is the decoded length L (plan 869ejxng3 rev 3, step-0 gate).
         int64_t getDecodedFrames() const;
 
+        // The loop's wrap seek: back to the audio stream's first packet, with
+        // no soxr_clear (soxr sees one continuous input). False when the seek
+        // fails or lands anywhere but the first packet (plan rev 3 section
+        // 4.3h, h.2 WRAP steps 1-4; the caller takes the failed-wrap path).
+        bool seekToFirstPacket();
+        // File-sample index (content sample 0 = the first sample delivered
+        // after open(), at the file rate) of the first sample delivered since
+        // open() or the last seek; INT64_MIN if unknown.
+        int64_t getFirstDeliveredSample() const;
+
     private:
         // cuems-mediadecoder members
         cuems_mediadecoder::MediaFileReader fileReader;
@@ -109,6 +119,18 @@ class AudioFstream
         bool decoderDrained;    // the decoder returned AVERROR_EOF after the flush
         bool resamplerDrained;  // soxr's tail delivered after eofReached
         int64_t decodedFrames;
+
+        // First-packet seek state
+        int64_t firstAudioTs;        // pts (else dts) of the stream's first audio packet
+        bool firstAudioTsKnown;
+        int64_t audioStartTime;      // stream start_time: the fallback position reference
+        int64_t contentStartTs;      // ts of content sample 0, taken at the first delivery after open
+        bool calibratePending;
+        bool hasDecoded;             // the decoder has output a frame since open()
+        int64_t pendingDiscard;      // frames to drop at the head of the decoded output
+        int64_t lastFrameTs;         // timestamp of the last decoded frame (its pts)
+        int64_t firstDeliveredSample;
+        bool firstDeliveredKnown;
         bool errorState;
         streamsize lastBytesRead;
         
@@ -143,6 +165,8 @@ class AudioFstream
         soxr_quality_spec_t parseQualityString(const string& quality);
         bool decodeNextFrame();  // Decode one frame from FFmpeg
         bool refillConversionBuffer();  // false once decoder and swr are drained
+        bool firstPacketSeek(bool atOpen);
+        int64_t tsToFileSample(int64_t ts) const;
         string getFFmpegError(int errnum);  // Translate FFmpeg error codes
 };
 

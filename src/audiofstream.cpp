@@ -41,6 +41,10 @@
 #include <cstring>
 #include <algorithm>
 
+extern "C" {
+#include <libavutil/intreadwrite.h>
+}
+
 ////////////////////////////////////////////
 // Constructor
 ////////////////////////////////////////////
@@ -60,6 +64,16 @@ AudioFstream::AudioFstream( const string filename,
     decoderDrained = false;
     resamplerDrained = false;
     decodedFrames = 0;
+    firstAudioTs = AV_NOPTS_VALUE;
+    firstAudioTsKnown = false;
+    audioStartTime = AV_NOPTS_VALUE;
+    contentStartTs = AV_NOPTS_VALUE;
+    calibratePending = false;
+    hasDecoded = false;
+    pendingDiscard = 0;
+    lastFrameTs = AV_NOPTS_VALUE;
+    firstDeliveredSample = INT64_MIN;
+    firstDeliveredKnown = false;
     errorState = false;
     lastBytesRead = 0;
     
@@ -197,6 +211,13 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
     // Calculate total samples from duration
     AVFormatContext* formatContext = fileReader.getFormatContext();
     AVStream* audioStream = formatContext->streams[audioStreamIndex];
+    audioStartTime = audioStream->start_time;
+    // Without the packet time base libavcodec cannot shift frame->pts by the
+    // samples it skips (MP3 delay, Opus pre-skip), and positions come out
+    // 1105 / 312 samples early
+    if (codecContext) {
+        codecContext->pkt_timebase = audioStream->time_base;
+    }
     if (audioStream->duration != AV_NOPTS_VALUE) {
         totalSamples = av_rescale_q(audioStream->duration, audioStream->time_base, 
                                     (AVRational){1, (int)fileSampleRate});
@@ -255,6 +276,18 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
     resamplerDrained = false;
     decodedFrames = 0;
     currentSamplePos = 0;
+    hasDecoded = false;
+    firstAudioTsKnown = false;
+
+    // The open-time seek to the first audio packet: records the first pts
+    // every wrap seek must land on, and makes matroska parse its cues now
+    // rather than inside the first real seek (plan rev 3, section 4.3h E1).
+    if (!firstPacketSeek(true)) {
+        cleanupFFmpeg();
+        errorState = true;
+        fileOpen = false;
+        return;
+    }
     
     CuemsLogger::getLogger()->logOK("File open OK! : " + path);
     CuemsLogger::getLogger()->logOK("Sample rate: " + std::to_string(fileSampleRate) + " Hz");
@@ -307,6 +340,10 @@ bool AudioFstream::decodeNextFrame()
         
         if (ret >= 0) {
             // Successfully decoded a frame
+            hasDecoded = true;
+            // frame->pts carries the decoder's own skip (MP3 LAME delay, the Opus
+            // pre-skip); best_effort_timestamp does not
+            lastFrameTs = (frame->pts != AV_NOPTS_VALUE) ? frame->pts : frame->best_effort_timestamp;
             // Debug: log frame info for first few frames
             static int frame_count = 0;
             if (frame_count < 3) {
@@ -406,9 +443,135 @@ bool AudioFstream::refillConversionBuffer()
         
         conversionBufferUsed = out_samples * fileChannels;
         conversionBufferPos = 0;
-        decodedFrames += out_samples;
+
+        // Drop a pending head discard (Opus pre-skip after a wrap seek)
+        int64_t discarded = 0;
+        if (pendingDiscard > 0) {
+            discarded = std::min(pendingDiscard, (int64_t)out_samples);
+            pendingDiscard -= discarded;
+            conversionBufferPos = discarded * fileChannels;
+        }
+        if (!firstDeliveredKnown && out_samples > discarded) {
+            firstDeliveredKnown = true;
+            if (calibratePending) {
+                // Content sample 0: the first sample out of the open-time seek
+                calibratePending = false;
+                AVStream* st = fileReader.getFormatContext()->streams[audioStreamIndex];
+                contentStartTs = (lastFrameTs == AV_NOPTS_VALUE) ? AV_NOPTS_VALUE :
+                    lastFrameTs + av_rescale_q(discarded, (AVRational){1, (int)fileSampleRate}, st->time_base);
+            }
+            const int64_t at = tsToFileSample(lastFrameTs);
+            firstDeliveredSample = (at == INT64_MIN) ? INT64_MIN : at + discarded;
+        }
+        decodedFrames += out_samples - discarded;
     }
     return true;
+}
+
+////////////////////////////////////////////
+// File-sample index of a stream timestamp
+////////////////////////////////////////////
+// Relative to content sample 0. A raw pts is off by the container's start (an
+// MP3 with a LAME tag starts 1105 samples in), and start_time is not always
+// that start: matroska's includes the Opus pre-skip (-7 ms on a webm), so the
+// reference is the pts of the first sample delivered after the open-time
+// seek, with start_time only until that first delivery.
+int64_t AudioFstream::tsToFileSample(int64_t ts) const
+{
+    if (ts == AV_NOPTS_VALUE || audioStreamIndex < 0 || fileSampleRate == 0) {
+        return INT64_MIN;
+    }
+    AVStream* st = fileReader.getFormatContext()->streams[audioStreamIndex];
+    const int64_t start = (contentStartTs != AV_NOPTS_VALUE) ? contentStartTs :
+                          (audioStartTime == AV_NOPTS_VALUE) ? 0 : audioStartTime;
+    return av_rescale_q(ts - start, st->time_base, (AVRational){1, (int)fileSampleRate});
+}
+
+////////////////////////////////////////////
+// Seek to the audio stream's first packet
+////////////////////////////////////////////
+// Seeks on the AUDIO stream (a video index drops the first audio blocks of
+// an A/V matroska), flushes, then reads up to the first audio packet itself:
+// its pts must be the stream's first, recorded by the open-time call (else
+// the wrap failed, M9), and an Opus decoder that has already decoded gets its
+// pre-skip discarded when the packet carries no skip side data (libavcodec
+// applies the pre-skip only once per decoder, M10). No soxr_clear.
+bool AudioFstream::firstPacketSeek(bool atOpen)
+{
+    AVFormatContext* fc = fileReader.getFormatContext();
+    int ret = avformat_seek_file(fc, audioStreamIndex, INT64_MIN, INT64_MIN, INT64_MIN, 0);
+    if (ret < 0 && !atOpen) {
+        CuemsLogger::getLogger()->logError("Wrap seek failed: " + getFFmpegError(ret));
+        return false;
+    }
+    // At open a refused seek is harmless: nothing has been read yet
+    audioDecoder.flush();
+    
+    conversionBufferUsed = 0;
+    conversionBufferPos = 0;
+    eofReached = false;
+    demuxEof = false;
+    decoderDrained = false;
+    resamplerDrained = false;
+    decodedFrames = 0;
+    pendingDiscard = 0;
+    firstDeliveredKnown = false;
+    firstDeliveredSample = INT64_MIN;
+    
+    while (true) {
+        ret = fileReader.readPacket(packet);
+        if (ret < 0) {
+            CuemsLogger::getLogger()->logError("No audio packet after the first-packet seek: " +
+                                               getFFmpegError(ret));
+            return false;
+        }
+        if (packet->stream_index == audioStreamIndex) {
+            break;
+        }
+        av_packet_unref(packet);
+    }
+    
+    const int64_t ts = (packet->pts != AV_NOPTS_VALUE) ? packet->pts : packet->dts;
+    if (atOpen) {
+        firstAudioTs = ts;
+        firstAudioTsKnown = true;
+        contentStartTs = AV_NOPTS_VALUE;
+        calibratePending = true;
+    } else if (!firstAudioTsKnown || ts != firstAudioTs) {
+        CuemsLogger::getLogger()->logError("Wrap seek landed at ts " + std::to_string(ts) +
+                                           ", the first audio packet is at " + std::to_string(firstAudioTs));
+        av_packet_unref(packet);
+        return false;
+    }
+    
+    size_t sdSize = 0;
+    const uint8_t* sd = av_packet_get_side_data(packet, AV_PKT_DATA_SKIP_SAMPLES, &sdSize);
+    const bool skipSideData = sd && sdSize >= 4 && AV_RL32(sd) > 0;
+    AVCodecParameters* par = fc->streams[audioStreamIndex]->codecpar;
+    if (!atOpen && hasDecoded && par->codec_id == AV_CODEC_ID_OPUS && !skipSideData) {
+        pendingDiscard = par->initial_padding;
+    }
+    
+    ret = audioDecoder.sendPacket(packet);
+    av_packet_unref(packet);
+    if (ret < 0) {
+        CuemsLogger::getLogger()->logError("Decoder refused the first packet: " + getFFmpegError(ret));
+        return false;
+    }
+    return true;
+}
+
+bool AudioFstream::seekToFirstPacket()
+{
+    if (!fileOpen || errorState) {
+        return false;
+    }
+    return firstPacketSeek(false);
+}
+
+int64_t AudioFstream::getFirstDeliveredSample() const
+{
+    return firstDeliveredKnown ? firstDeliveredSample : INT64_MIN;
 }
 
 ////////////////////////////////////////////
@@ -580,6 +743,9 @@ void AudioFstream::seekg(long long pos, ios_base::seekdir dir)
     decoderDrained = false;
     resamplerDrained = false;
     decodedFrames = 0;
+    pendingDiscard = 0;
+    firstDeliveredKnown = false;
+    calibratePending = false;
     
     // Reset resampler state if active (critical for looping/seeking)
     if (resamplingEnabled && resampler) {
