@@ -1,3 +1,15 @@
+cuems-audioplayer (0.0.3-13~pre869ejxng3.1) bookworm; urgency=medium
+
+  * TEST BUILD, not a release: 869ejxng3 + 1amfwm7e6cw Phase A (rig rows on
+    test2 and .111). Merges fix/869ejxng3-loop-varispeed: the feed engine
+    (always-on variable-ratio soxr, the head cache, gapless wraps on one
+    period, the seek worker, the §4.3h state machine), the MTC lock loop,
+    /loop passes num den, /offset_i, the CAPS and LOOP ack lines.
+  * The merge keeps debian/bookworm's logging cleanup on the rewritten
+    src/audiofstream.cpp and debian/bookworm's submodule pins.
+
+ -- Ion Reguera <ion@stagelab.coop>  Wed, 21 Oct 2026 17:53:04 +0200
+
 cuems-audioplayer (0.0.3-12) bookworm; urgency=medium
 
   * End-of-file limit in output-channel bytes (1amfwm7e4wv). The stream
