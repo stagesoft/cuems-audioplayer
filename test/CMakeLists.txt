@@ -32,6 +32,8 @@ add_executable(audioplayer_tests
     test_audiofstream.cpp
     test_audioplayer.cpp
     test_step0_gate.cpp
+    test_audiofstream_feed.cpp
+    test_soxr_feeding.cpp
     test_main.cpp
     # Source files needed for testing
     ../src/commandlineparser.cpp
