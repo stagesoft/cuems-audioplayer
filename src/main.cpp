@@ -23,6 +23,7 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 */
+// SPDX-FileContributor: Ion Reguera <ion@stagelab.coop>
 
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
@@ -33,6 +34,8 @@
 //////////////////////////////////////////////////////////
 
 #include "main.h"
+#include <unistd.h>
+#include "testknobs.h"
 
 using namespace std;
 namespace fs = std::filesystem;
@@ -300,6 +303,10 @@ int main( int argc, char *argv[] ) {
     //logger->setNewSlug("a" + std::to_string(portNumber) + processUuid);
 
     // (proto_fruta) if we got a uiid from command line options use only that
+#ifdef CUEMS_TEST_KNOBS
+    testknobs::knobs().readEnv();
+#endif
+
     if (!processUuid.empty()){
         logger->setNewSlug("d" + processUuid);
     } else {
@@ -359,15 +366,34 @@ int main( int argc, char *argv[] ) {
     //////////////////////////////////////////////////////////
     // We are running!! Let's check the USR1 signal handler
     // to let everyone know that we are running
+    myAudioPlayer->slug = logger->getSlug();
+#ifdef CUEMS_TEST_KNOBS
+    logger->logWarning( "TEST BUILD: knobs HF_LOG='" + testknobs::knobs().logPath + "' HF_DROP_LOOP=" +
+                        std::to_string(testknobs::knobs().dropLoop) + " HF_FAIL_WRAP_SEEK=" +
+                        std::to_string(testknobs::knobs().failWrap ? 1 : 0) );
+#endif
+
+    // The capability line, before RUNNING, in one write(2) (section 4.2)
+    {
+        const std::string caps = "[" + logger->getSlug() + "] [OK] CAPS: loop varispeed\n";
+        ssize_t r = ::write(STDOUT_FILENO, caps.data(), caps.size());
+        (void)r;
+    }
     sigUsr1Handler( SIGUSR1 );
 
     //////////////////////////////////////////////////////////
-    // Wait for it to finnish somehow
-    while ( !myAudioPlayer->endOfPlay ) {
+    // The main loop: the journal ring every 10 ms; /quit, SIGTERM and SIGINT
+    // are flags acted on here, never in the signal's or the OSC thread (I16e, J16)
+    while ( !myAudioPlayer->endOfPlay && !AudioPlayer::quitRequested ) {
+        myAudioPlayer->drainJournal();
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+    myAudioPlayer->drainJournal();
 
-    logger->logInfo( "End of playing reached, finishing" );
+    if ( AudioPlayer::quitRequested )
+        logger->logInfo( "Quit requested, finishing" );
+    else
+        logger->logInfo( "End of playing reached, finishing" );
     logger->logInfo( "Exiting with result code: " + std::to_string( EXIT_SUCCESS ) );
 
     // Cleaning
@@ -455,46 +481,22 @@ void showusage( void ) {
 }
 
 //////////////////////////////////////////////////////////
-void sigTermHandler( int signum ) {
-
-    std::string str = "SIGTERM received! Finishing.";
-    cout << endl << endl << str << endl << endl;
-
-    logger->getLogger()->logInfo( str );
-
-    if ( myAudioPlayer != NULL )
-        delete myAudioPlayer;
-
-    if ( logger != NULL )
-        delete logger;
-
-    logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(signum) );
-
-    exit(signum);
-
+void sigTermHandler( int /* signum */ ) {
+    // A flag only: the main loop finishes and deletes the player (I16e)
+    AudioPlayer::quitRequested = true;
 }
 
 //////////////////////////////////////////////////////////
 void sigUsr1Handler( int /* signum */  ) {
     std::string str = "RUNNING!";
-    std::cout << "[" << logger->getSlug() << "] [OK] " << str << endl;
+    const std::string line = "[" + logger->getSlug() + "] [OK] " + str + "\n";
+    ssize_t r = ::write(STDOUT_FILENO, line.data(), line.size());   // one write(2)
+    (void)r;
     logger->getLogger()->logOK( str );
 }
 
 //////////////////////////////////////////////////////////
-void sigIntHandler( int signum ) {
-    logger->getLogger()->logInfo( "SIGINT received!" );
-
-    logger->getLogger()->logInfo( "Exiting with result code: " + std::to_string(signum) );
-
-    if ( myAudioPlayer != NULL )
-        delete myAudioPlayer;
-
-    if ( logger != NULL )
-        delete logger;
-
-    std::cout << endl;
-
-    exit(signum);
-
+void sigIntHandler( int /* signum */ ) {
+    // A flag only: the main loop finishes and deletes the player (I16e)
+    AudioPlayer::quitRequested = true;
 }
