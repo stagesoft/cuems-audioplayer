@@ -34,14 +34,26 @@ add_executable(audioplayer_tests
     test_step0_gate.cpp
     test_audiofstream_feed.cpp
     test_soxr_feeding.cpp
+    test_lockloop.cpp
+    test_h3_table.cpp
     test_main.cpp
     # Source files needed for testing
     ../src/commandlineparser.cpp
     ../src/audiofstream.cpp
+    ../src/playercore.cpp
     ../src/audioplayer.cpp
     # Use test version of main functions (without main())
     main_functions.cpp
 )
+
+# The tests drive the real mtcreceiver decoder through its MTCRECV_TESTING
+# hooks: their own copy of the library, the production target untouched (I16g)
+add_library(mtcreceiver_testing STATIC ${CMAKE_SOURCE_DIR}/src/mtcreceiver/mtcreceiver.cpp)
+target_compile_definitions(mtcreceiver_testing PUBLIC MTCRECV_TESTING HAVE_CUEMS_LOGGER)
+target_include_directories(mtcreceiver_testing PUBLIC
+    "${CMAKE_SOURCE_DIR}/src/mtcreceiver"
+    "${CMAKE_SOURCE_DIR}/src/cuemslogger")
+target_link_libraries(mtcreceiver_testing PUBLIC rtmidi cuemslogger)
 
 # Link test libraries
 target_link_libraries(audioplayer_tests PRIVATE
@@ -55,7 +67,7 @@ target_link_libraries(audioplayer_tests PRIVATE
 target_link_libraries(audioplayer_tests PRIVATE
     cuems-mediadecoder
     cuemslogger
-    mtcreceiver
+    mtcreceiver_testing
     oscreceiver
     rtaudio
     rtmidi
@@ -63,6 +75,7 @@ target_link_libraries(audioplayer_tests PRIVATE
     stdc++fs
     ${SWRESAMPLE_LIBRARIES}
     ${SOXR_LIBRARIES}
+    z
 )
 
 # Include directories
