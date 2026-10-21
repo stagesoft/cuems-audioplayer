@@ -138,8 +138,9 @@ void PlayerCore::drainEngineEvents()
                 e10_ = 0;
                 loop_.resetFilter();
                 starts_++;
+                // c = the file rate, so the log's ms are right at any rate (T7-11)
                 push(f.type == A::EvType::CACHE_START ? LogEvent::CACHE_START : LogEvent::SEEK_PICKUP,
-                     f.a, f.b, 0, 0, 0, 0, f.kind);
+                     f.a, f.b, (int64_t)engine_.getSampleRate(), 0, 0, 0, f.kind);
                 break;
             case A::EvType::HANDOVER_LATE: push(LogEvent::HANDOVER_LATE, f.a, f.b); break;
             case A::EvType::END: push(LogEvent::END, f.a); break;
@@ -274,10 +275,12 @@ std::string PlayerCore::describe(const LogEvent& e, const std::string& slug, boo
     const char* kind = (e.kind >= 0 && e.kind < 6) ? kinds[e.kind] : "?";
     switch (e.type) {
     case LogEvent::CACHE_START:
-        snprintf(b, sizeof b, "cache start at %lld ms (%s) origin=%lld", (long long)(e.a / 48), kind, (long long)e.b);
+        snprintf(b, sizeof b, "cache start at %lld ms (%s) origin=%lld", (long long)(e.a * 1000 / (e.c > 0 ? e.c : 48000)),
+                 kind, (long long)e.b);
         break;
     case LogEvent::SEEK_PICKUP:
-        snprintf(b, sizeof b, "seek to %lld ms (%s) done, origin=%lld", (long long)(e.a / 48), kind, (long long)e.b);
+        snprintf(b, sizeof b, "seek to %lld ms (%s) done, origin=%lld", (long long)(e.a * 1000 / (e.c > 0 ? e.c : 48000)),
+                 kind, (long long)e.b);
         break;
     case LogEvent::RESYNC:
         snprintf(b, sizeof b, "resync \xce\x94=%lld ms at %lld ms", (long long)e.a, (long long)e.b);

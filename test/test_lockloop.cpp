@@ -479,3 +479,15 @@ TEST(LockSim, Node01TracesReplay) {
         EXPECT_LE(s.st.maxAbsEfSteady, 2.0);
     }
 }
+
+// T7-11: the start lines print the target in ms of the FILE's rate (they divided by a hard-coded 48)
+TEST(PlayerCoreLog, StartLinesUseTheFileRate) {
+    bool so; int lvl;
+    LogEvent e;
+    e.type = LogEvent::CACHE_START; e.a = 44100; e.b = 123; e.c = 44100; e.kind = 0;
+    EXPECT_NE(PlayerCore::describe(e, "d1", &so, &lvl).find("cache start at 1000 ms (reveal) origin=123"), std::string::npos);
+    e.type = LogEvent::SEEK_PICKUP; e.a = 88200; e.c = 44100; e.kind = 1;
+    EXPECT_NE(PlayerCore::describe(e, "d1", &so, &lvl).find("seek to 2000 ms (offset) done"), std::string::npos);
+    e.type = LogEvent::CACHE_START; e.a = 48000; e.c = 48000;
+    EXPECT_NE(PlayerCore::describe(e, "d1", &so, &lvl).find("cache start at 1000 ms"), std::string::npos);
+}
