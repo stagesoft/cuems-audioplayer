@@ -155,6 +155,7 @@ class AudioFstream
         // check, the mode (off latched per file).
         void setLoop(int passes, int64_t num, int64_t den);
         LoopMode loopMode() const { return mode; }
+        int loopPassesValue() const { return loopPasses; }
         int takeWrapCount();
 
         // h.4, the one start rule. t absolute.
@@ -190,7 +191,8 @@ class AudioFstream
         double posConstant() const { return posC; }
         int64_t cursor() const;             // pass-relative feed position
         int64_t cacheLength() const { return cacheH; }
-        int64_t periodSamples() const;      // P_s in use (L_dec for num = 0 once known)
+        int64_t periodSamples() const;      // P_s at the pass boundary (L_dec for num = 0 once known)
+        int64_t periodForStart() const;     // P_s for t mod P_s (the header length before the first EOF)
         int64_t decodedLength() const { return lDec; }   // -1 until the first EOF
         int64_t endSamples() const;         // end (h.1)
         int64_t wrapsLeft() const;

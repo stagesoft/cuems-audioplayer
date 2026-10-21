@@ -1370,7 +1370,7 @@ void AudioFstream::setLoop(int passes, int64_t num, int64_t den)
     } else if (passes == 1) {
         mode = LoopMode::ONCE;
     } else {
-        const int64_t p = periodSamples();
+        const int64_t p = periodForStart();
         AVCodecParameters* par = fileReader.getFormatContext() ?
             fileReader.getFormatContext()->streams[audioStreamIndex]->codecpar : nullptr;
         const int64_t codecFrame = (par && par->frame_size > 0) ? par->frame_size : 0;
@@ -1406,10 +1406,22 @@ int64_t AudioFstream::periodSamples() const
     return INF_SAMPLES;   // num = 0 before the first EOF: the boundary is the true EOF (E24)
 }
 
+// The period for the start arithmetic (t mod P_s, passIndex, origin, end):
+// before the first EOF with num = 0 it is the container's header length
+// (section 4.3h, h.1); the pass BOUNDARY stays at the true EOF then
+// (periodSamples()), so a header shorter than the decode never cuts pass 1.
+int64_t AudioFstream::periodForStart() const
+{
+    if (pS > 0) return pS;
+    if (lDec >= 0) return lDec;
+    if (headerLen > 0) return headerLen;
+    return INF_SAMPLES;
+}
+
 int64_t AudioFstream::endSamples() const
 {
     if (loopPasses <= 0) return INF_SAMPLES;
-    const int64_t p = periodSamples();
+    const int64_t p = periodForStart();
     if (p >= INF_SAMPLES) return INF_SAMPLES;
     return (int64_t)loopPasses * p;
 }
@@ -1489,7 +1501,7 @@ void AudioFstream::post(JobKind k, int64_t tPass)
     jobs[idx].kind = k;
     jobs[idx].tPass = tPass;
     jobs[idx].endAbs = endSamples();
-    jobs[idx].pS = periodSamples();
+    jobs[idx].pS = periodForStart();
     jobs[idx].gen = gen.load(std::memory_order_relaxed);
     const int old = pendingIdx.exchange(idx, std::memory_order_acq_rel);
     if (old >= 0) {
@@ -1841,7 +1853,7 @@ void AudioFstream::serviceWorker(const LiveCtx& ctx)
                 decAtHFlag = false;
                 if (psState == Ps::SEEKING && waitingStart) {
                     waitingStart = false;
-                    const int64_t p = periodSamples();
+                    const int64_t p = periodForStart();
                     const int64_t t = ctx.target;
                     gen.fetch_add(1);
                     post(JobKind::SEEK, (looping() && p < INF_SAMPLES && t >= 0) ? t % p : std::max<int64_t>(0, t));
@@ -1890,7 +1902,7 @@ void AudioFstream::pickup(const LiveCtx& ctx, const JobResult& r)
         post(JobKind::RESET);
         return;
     }
-    const int64_t p = periodSamples();
+    const int64_t p = periodForStart();
     const int64_t tp = (looping() && p < INF_SAMPLES) ? t % p : t;
     if (lDec >= 0 && p > lDec && tp >= lDec && p < INF_SAMPLES) {
         beginOutput(t, tp, Feed::PAD, StartKind::OFFSET, false);   // the target is in the pad (T8)
@@ -1939,7 +1951,7 @@ void AudioFstream::start(int64_t t, StartKind kind)
         return;
     }
     // step 2
-    const int64_t p = periodSamples();
+    const int64_t p = periodForStart();
     const bool loop = looping() && p < INF_SAMPLES;
     const int64_t tp = loop ? t % p : t;
     passIdx = loop ? t / p : 0;
@@ -1978,7 +1990,7 @@ void AudioFstream::start(int64_t t, StartKind kind)
 
 void AudioFstream::beginOutput(int64_t t, int64_t tPass, Feed src, StartKind kind, bool clean)
 {
-    const int64_t p = periodSamples();
+    const int64_t p = periodForStart();
     const bool loop = looping() && p < INF_SAMPLES;
     passIdx = loop ? t / p : 0;
     originAbs = (loop ? passIdx * p : 0) + tPass;
@@ -2127,7 +2139,8 @@ bool AudioFstream::feedInput(const float*& ptr, size_t& avail, const LiveCtx& ct
             lateAtFrames = framesOut;
             ev(EvType::HANDOVER_LATE, cur);
             const int64_t t = ctx.target;
-            post(JobKind::SEEK, (looping() && p < INF_SAMPLES && t >= 0) ? t % p : std::max<int64_t>(0, t));
+            const int64_t ps = periodForStart();
+            post(JobKind::SEEK, (looping() && ps < INF_SAMPLES && t >= 0) ? t % ps : std::max<int64_t>(0, t));
             return false;
         }
         if (cur >= p) {
@@ -2144,7 +2157,8 @@ bool AudioFstream::feedInput(const float*& ptr, size_t& avail, const LiveCtx& ct
             psState = Ps::SEEKING;
             gen.fetch_add(1);
             const int64_t t = ctx.target;
-            post(JobKind::SEEK, (looping() && p < INF_SAMPLES && t >= 0) ? t % p : std::max<int64_t>(0, t));
+            const int64_t ps = periodForStart();
+            post(JobKind::SEEK, (looping() && ps < INF_SAMPLES && t >= 0) ? t % ps : std::max<int64_t>(0, t));
             return false;
         }
         const int64_t nx0 = nextSampleIndex();
@@ -2232,7 +2246,7 @@ size_t AudioFstream::process(float* out, size_t frames, double ratio, const Live
         retryFramesLeft -= (int64_t)frames;
         if (retryFramesLeft <= 0) {
             retryFramesLeft = 0;
-            const int64_t p = periodSamples();
+            const int64_t p = periodForStart();
             const int64_t t = ctx.target;
             post(JobKind::SEEK, (looping() && p < INF_SAMPLES && t >= 0) ? t % p : std::max<int64_t>(0, t));
         }
@@ -2242,7 +2256,7 @@ size_t AudioFstream::process(float* out, size_t frames, double ratio, const Live
         AVCodecParameters* par = fileReader.getFormatContext()->streams[audioStreamIndex]->codecpar;
         const int64_t bound = std::max<int64_t>(8 * (int64_t)std::max(par->frame_size, 0),
                                                 (int64_t)(4 * frames * rNom));
-        const int64_t p = periodSamples();
+        const int64_t p = periodForStart();
         const int64_t t = ctx.target;
         if (t < 0) {
             start(t, StartKind::OFFSET);
@@ -2355,7 +2369,7 @@ size_t AudioFstream::process(float* out, size_t frames, double ratio, const Live
     }
     framesOut += (int64_t)frames;
     // passIndex = the output's wrap count (E12's output crossing)
-    const int64_t p = periodSamples();
+    const int64_t p = periodForStart();
     if (psState == Ps::PLAY && looping() && p < INF_SAMPLES) {
         while (pos() >= (double)(passIdx + 1) * (double)p) {
             passIdx++;
