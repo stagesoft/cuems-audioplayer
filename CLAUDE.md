@@ -59,6 +59,16 @@ This makes the player **self-gating**: it can follow MTC early and auto-start at
 `start_mtc`, so the engine's per-cue reveal OSC becomes optional (kept as
 belt-and-suspenders until the fleet runs the fixed binary).
 
+**Looping audio with video: the guarantee (Ion, 2026-10-19).** Audio and video stay in
+sync across the passes of a loop **only if (A) their durations are exactly the same, or
+(B) they are in the same container** (one file; this player extracts the audio). Two
+separate files of different lengths drift apart by the difference on every pass: an
+operator error, not a bug. Audio extracted from a video into a separate file keeps that
+video's audio-stream length (the VideoCue's period is its container's audio length), so that
+pair stays together; a video-only file next to an audio file of another length does not. The
+gapless, MTC-locked loop with one period per file is rev 3 of 869ejxng3 + 1amfwm7e6cw
+(`cuems-RELATIONS/Plans/2026-10-19-audio-loop-varispeed-869ejxng3-1amfwm7e6cw.md`).
+
 ## Field notes / gotchas
 
 - **A re-sync is an 80 ms jump.** The player follows MTC within 2 frames

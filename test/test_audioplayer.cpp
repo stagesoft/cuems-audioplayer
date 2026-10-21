@@ -19,10 +19,12 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 */
+// SPDX-FileContributor: Ion Reguera <ion@stagelab.coop>
 
 #include <gtest/gtest.h>
 #include <atomic>
 #include <filesystem>
+#include <type_traits>
 #include "audioplayer.h"
 
 namespace fs = std::filesystem;
@@ -31,185 +33,67 @@ namespace fs = std::filesystem;
 // - JACK audio server running
 // - Real audio hardware
 // - MTC receiver setup
-// We test what we can without hardware dependencies
+// The callback's logic lives in PlayerCore (test_lockloop.cpp) and the feed
+// in AudioFstream (test_audiofstream_feed.cpp, test_soxr_feeding.cpp): the
+// byte-domain playHead / audioMillisecondSize are gone, the position is
+// AudioFstream::pos() in content samples (plan 869ejxng3 + 1amfwm7e6cw rev 3).
 
 class AudioPlayerTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Reset static members
-        AudioPlayer::endOfStream = false;
         AudioPlayer::endOfPlay = false;
-        AudioPlayer::outOfFile = false;
-        AudioPlayer::playHead = 0;
-    }
-
-    void TearDown() override {
-        // Cleanup
+        AudioPlayer::quitRequested = false;
     }
 };
 
-// Test static member initialization
 TEST_F(AudioPlayerTest, StaticMemberInitialization) {
-    EXPECT_FALSE(AudioPlayer::endOfStream);
     EXPECT_FALSE(AudioPlayer::endOfPlay);
-    EXPECT_FALSE(AudioPlayer::outOfFile);
-    EXPECT_EQ(AudioPlayer::playHead, 0);
+    EXPECT_FALSE(AudioPlayer::quitRequested);
 }
 
-// Test static member modification
 TEST_F(AudioPlayerTest, StaticMemberModification) {
-    AudioPlayer::endOfStream = true;
-    EXPECT_TRUE(AudioPlayer::endOfStream);
-    
     AudioPlayer::endOfPlay = true;
     EXPECT_TRUE(AudioPlayer::endOfPlay);
-    
-    AudioPlayer::outOfFile = true;
-    EXPECT_TRUE(AudioPlayer::outOfFile);
-    
-    AudioPlayer::playHead = 1000;
-    EXPECT_EQ(AudioPlayer::playHead, 1000);
+    AudioPlayer::quitRequested = true;
+    EXPECT_TRUE(AudioPlayer::quitRequested);
 }
 
-// Test that AudioPlayer class exists and can be referenced
 TEST_F(AudioPlayerTest, ClassExists) {
-    // Just verify the class is defined
     EXPECT_TRUE(sizeof(AudioPlayer) > 0);
 }
 
-// Note: We cannot test AudioPlayer constructor/destructor without:
-// - JACK running
-// - Valid audio file
-// - Audio device available
-// These would be integration tests, not unit tests
-
-// Test that AudioPlayer inherits from OscReceiver
 TEST_F(AudioPlayerTest, InheritanceCheck) {
-    // AudioPlayer should inherit from OscReceiver
-    // This is a compile-time check, but we can verify the relationship exists
-    EXPECT_TRUE(true); // Placeholder - actual check would require instantiation
+    EXPECT_TRUE((std::is_base_of<OscReceiver, AudioPlayer>::value));
 }
 
-// Test atomic operations on playHead
-TEST_F(AudioPlayerTest, PlayHeadAtomicOperations) {
-    // Test that playHead can be modified atomically
-    long long int initial = AudioPlayer::playHead;
-    
-    AudioPlayer::playHead = 100;
-    EXPECT_EQ(AudioPlayer::playHead, 100);
-    
-    AudioPlayer::playHead = 200;
-    EXPECT_EQ(AudioPlayer::playHead, 200);
-    
-    AudioPlayer::playHead = initial;
-    EXPECT_EQ(AudioPlayer::playHead, initial);
-}
-
-// Test atomic operations on endOfStream
-TEST_F(AudioPlayerTest, EndOfStreamAtomicOperations) {
-    bool initial = AudioPlayer::endOfStream;
-    
-    AudioPlayer::endOfStream = true;
-    EXPECT_TRUE(AudioPlayer::endOfStream);
-    
-    AudioPlayer::endOfStream = false;
-    EXPECT_FALSE(AudioPlayer::endOfStream);
-    
-    AudioPlayer::endOfStream = initial;
-}
-
-// Test atomic operations on endOfPlay
 TEST_F(AudioPlayerTest, EndOfPlayAtomicOperations) {
-    bool initial = AudioPlayer::endOfPlay;
-    
     AudioPlayer::endOfPlay = true;
     EXPECT_TRUE(AudioPlayer::endOfPlay);
-    
     AudioPlayer::endOfPlay = false;
     EXPECT_FALSE(AudioPlayer::endOfPlay);
-    
-    AudioPlayer::endOfPlay = initial;
 }
 
-// Test atomic operations on outOfFile
-TEST_F(AudioPlayerTest, OutOfFileAtomicOperations) {
-    bool initial = AudioPlayer::outOfFile;
-    
-    AudioPlayer::outOfFile = true;
-    EXPECT_TRUE(AudioPlayer::outOfFile);
-    
-    AudioPlayer::outOfFile = false;
-    EXPECT_FALSE(AudioPlayer::outOfFile);
-    
-    AudioPlayer::outOfFile = initial;
+// /quit, SIGTERM and SIGINT are flags the main loop acts on (I16e, J16)
+TEST_F(AudioPlayerTest, QuitIsAFlag) {
+    AudioPlayer::quitRequested = true;
+    EXPECT_TRUE(AudioPlayer::quitRequested);
+    AudioPlayer::quitRequested = false;
+    EXPECT_FALSE(AudioPlayer::quitRequested);
 }
 
-// Test that constants are defined
-TEST_F(AudioPlayerTest, ConstantsDefined) {
-    // Test that preprocessor definitions exist
-    // These are compile-time checks
-    #ifdef MTC_FRAMES_TOLERANCE
-        EXPECT_TRUE(true);
-    #else
-        EXPECT_TRUE(false); // Should be defined
-    #endif
+// The position lives in the feed engine, in content samples
+TEST_F(AudioPlayerTest, PositionIsInContentSamples) {
+    AudioFstream s;
+    EXPECT_EQ(s.pos(), 0.0);
+    EXPECT_FALSE(s.feedPrepared());
 }
 
-// Test header file includes
-TEST_F(AudioPlayerTest, HeaderIncludes) {
-    // Verify that required headers are included
-    // This is a compile-time check
-    EXPECT_TRUE(true);
-}
-
-// Note: Testing AudioPlayer::audioCallback would require:
-// - Mock audio buffers
-// - Mock MTC receiver
-// - Complex setup
-// This is better suited for integration tests
-
-// Note: Testing AudioPlayer::ProcessMessage would require:
-// - OSC message construction
-// - Mock OSC receiver
-// - Complex setup
-// This is better suited for integration tests
-
-// Test that AudioPlayer has required member variables (compile-time check)
-TEST_F(AudioPlayerTest, MemberVariablesExist) {
-    // These are compile-time checks
-    // If the code compiles, these members exist
-    EXPECT_TRUE(true);
-}
-
-// Test thread safety of atomic members
 TEST_F(AudioPlayerTest, AtomicThreadSafety) {
-    // Verify that atomic members can be accessed from different contexts
-    // In a real scenario, these would be accessed from audio callback thread
-    // and main thread simultaneously
-    
-    AudioPlayer::playHead = 0;
-    AudioPlayer::endOfStream = false;
-    AudioPlayer::endOfPlay = false;
-    AudioPlayer::outOfFile = false;
-    
-    // Simulate concurrent access (simplified)
     for (int i = 0; i < 100; ++i) {
-        AudioPlayer::playHead = i * 100;
-        AudioPlayer::endOfStream = (i % 2 == 0);
         AudioPlayer::endOfPlay = (i % 3 == 0);
-        AudioPlayer::outOfFile = (i % 4 == 0);
+        AudioPlayer::quitRequested = (i % 2 == 0);
     }
-    
-    // Should not crash
-    EXPECT_GE(AudioPlayer::playHead, 0);
+    AudioPlayer::endOfPlay = false;
+    AudioPlayer::quitRequested = false;
+    EXPECT_FALSE(AudioPlayer::endOfPlay);
 }
-
-// Test that AudioPlayer constants have expected values
-TEST_F(AudioPlayerTest, ConstantValues) {
-    // MTC_FRAMES_TOLERANCE should be 2 (from header)
-    #ifdef MTC_FRAMES_TOLERANCE
-        EXPECT_EQ(MTC_FRAMES_TOLERANCE, 2);
-    #endif
-}
-
-
