@@ -1,3 +1,12 @@
+cuems-audioplayer (0.0.3-13~pre869ejxng3.2) bookworm; urgency=medium
+
+  * TEST BUILD, not a release: as .1 plus 07df374, the end drain plays the
+    content to its last sample (T7-1: soxr's VR flush stopped ~8 samples
+    short at a ratio near 1; the drain now feeds silence and ends on the
+    output's content position plus a 32-sample ring-out).
+
+ -- Ion Reguera <ion@stagelab.coop>  Wed, 21 Oct 2026 20:25:00 +0200
+
 cuems-audioplayer (0.0.3-13~pre869ejxng3.1) bookworm; urgency=medium
 
   * TEST BUILD, not a release: 869ejxng3 + 1amfwm7e6cw Phase A (rig rows on
