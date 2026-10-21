@@ -475,11 +475,15 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
     }
 
 #ifdef CUEMS_TEST_KNOBS
+    testknobs::knobs().dumpPush(out, (size_t)nBufferFrames * ch);
     if (testknobs::knobs().f) {
         const lockloop::Mtc m = ap->core->mtc();
         testknobs::knobs().periods.push({now, (int64_t)(ap->core->target()), 0, (int)m, ap->audioFile.pos(),
                                          ap->core->loop().ef(), ap->core->loop().u(), ap->audioFile.fifo(),
-                                         (monoNs() - now) / 1000});
+                                         (monoNs() - now) / 1000, (int)ap->audioFile.feed(),
+                                         ap->audioFile.feedPassIndex(), ap->audioFile.cursor(),
+                                         ap->audioFile.inputConsumed(),
+                                         (int64_t)ap->audioFile.lastPeriodProduced()});
     }
 #endif
 

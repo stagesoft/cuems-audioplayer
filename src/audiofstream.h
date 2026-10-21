@@ -188,6 +188,8 @@ class AudioFstream
         int64_t origin() const { return originAbs; }
         double pos() const;                 // origin + sum(r*N) + c
         double fifo() const { return sumIdone - sumRN; }   // FIFO health, 241 steady
+        int64_t feedPassIndex() const { return feedPass; }   // the feed's pass (test-build feed trace, T7-9)
+        double inputConsumed() const { return sumIdone; }    // input fed to soxr since the last start
         double posConstant() const { return posC; }
         int64_t cursor() const;             // pass-relative feed position
         int64_t cacheLength() const { return cacheH; }
