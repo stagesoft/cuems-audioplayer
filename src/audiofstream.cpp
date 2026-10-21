@@ -1642,16 +1642,19 @@ bool AudioFstream::midFileSeek(const Job& j, JobResult& r)
     AVStream* ast = fc->streams[audioStreamIndex];
     AVCodecParameters* par = ast->codecpar;
     const int64_t frameSize = par->frame_size > 0 ? par->frame_size : 0;
-    const int64_t preroll = std::max<int64_t>(par->seek_preroll, 4 * frameSize);
+    const int64_t codecPreroll = std::max<int64_t>(0, par->seek_preroll);
+    // Twice the codec's declared pre-roll: Opus does not converge in its 80 ms
+    // (up to 0.06 off on casas), it does in 160 ms (1e-5)
+    const int64_t preroll = std::max<int64_t>(2 * codecPreroll, 4 * frameSize);
     const int64_t tp = j.tPass;
     const int64_t s0 = std::max<int64_t>(0, tp - preroll);
     const int64_t gop2 = (int64_t)(2.0 * gopSeconds * fileSampleRate);
     const int64_t msTol = isMatroska ? fileSampleRate / 1000 : 0;   // matroska's 1 ms index
-    // Acceptance: the landing leaves the codec its own pre-roll before the
-    // target (seek_preroll, in samples: 0 for PCM and most codecs, 3840 for
-    // Opus at 48 kHz). `preroll` above is only the margin of the request.
-    // A target inside the codec's pre-roll from the start accepts sample 0.
-    const int64_t bound = std::max<int64_t>(0, tp - std::max<int64_t>(0, par->seek_preroll));
+    // Acceptance: the landing leaves the codec twice its declared pre-roll
+    // before the target (seek_preroll, in samples: 0 for PCM and most codecs,
+    // 3840 for Opus at 48 kHz, so 7680 = 160 ms). `preroll` above is the
+    // margin of the request. A target inside that from the start accepts sample 0.
+    const int64_t bound = std::max<int64_t>(0, tp - 2 * codecPreroll);
     const bool videoIndex = (seekStreamIndex != audioStreamIndex);
     auto toTs = [&](int si, int64_t sample) -> int64_t {
         const int64_t base = (contentStartTs != AV_NOPTS_VALUE) ? contentStartTs :

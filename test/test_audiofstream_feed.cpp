@@ -255,13 +255,15 @@ TEST_F(FeedEngine, WorkerSeekLandsOnTheLiveTarget) {
     }
 }
 
-// Seek acceptance (section 4.3a, the coordinator's decision on step 1's
-// item 7): a landing is accepted iff it leaves the codec its own pre-roll,
-// landing <= target - seek_preroll (3840 samples for Opus at 48 kHz). The
-// Opus and webm-Opus decode in the first 100 ms after the pickup matches a
-// linear decode of the same region. Opus does not converge bit-exactly in
-// 80 ms (casas, this chirp: up to 0.06 with 80 ms, 1e-5 with 160 ms, 0 with
-// 1 s), so the gate is the documented lossy tolerance (0.1, the AAC PNS one).
+// Seek acceptance (section 4.3a, the coordinator's decisions on step 1's
+// item 7): a landing is accepted iff it leaves the codec twice its declared
+// pre-roll, landing <= target - 2 x seek_preroll (7680 samples = 160 ms for
+// Opus at 48 kHz). The Opus and webm-Opus decode in the first 100 ms after
+// the pickup matches a linear decode of the same region within 0.01. Opus
+// does not converge bit-exactly: on this chirp the worst error was 0.0057 over
+// 120 engine seeks at 2x pre-roll (casas probe8), and plain libav gives
+// 0.0025 with 160-240 ms of lead, 2.8e-4 with 240-480 ms, 6e-8 beyond (probe
+// opusconv2), so 1e-4 is not reachable at this bound; 0.01 = 1.75x the worst.
 TEST_F(FeedEngine, OpusSeekGetsItsPrerollAndConverges) {
     std::mt19937 rng(3);
     for (const char* n : {"a.opus", "a.weba"}) {
@@ -286,7 +288,7 @@ TEST_F(FeedEngine, OpusSeekGetsItsPrerollAndConverges) {
             for (int i = 0; i < 12; i++) g.period();                 // >= 100 ms of input below soxr
             ASSERT_GE((long)(g.tap.v.size() / ch), 4800L);
             const int64_t tol = std::string(n) == "a.weba" ? 48 : 0;   // webm's 1 ms index
-            EXPECT_GE(g.s.lastSeekLeadSamples(), 3840 - tol) << "seek to " << t;
+            EXPECT_GE(g.s.lastSeekLeadSamples(), 7680 - tol) << "seek to " << t;
             const long off = contentOffset(g.tap.v, ref, ch, g.s.origin(), 2048, 60);
             EXPECT_LE(std::labs(off), tol);
             double maxd = 0;
@@ -294,7 +296,7 @@ TEST_F(FeedEngine, OpusSeekGetsItsPrerollAndConverges) {
                 for (unsigned c = 0; c < ch; c++)
                     maxd = std::max(maxd, (double)std::fabs(g.tap.v[(size_t)i * ch + c] -
                                                              ref[(size_t)(g.s.origin() + off + i) * ch + c]));
-            EXPECT_LE(maxd, 0.1) << "seek to " << t;
+            EXPECT_LE(maxd, 0.01) << "seek to " << t;
             EXPECT_EQ(g.s.seekRetryCount(), 0);
         }
     }
