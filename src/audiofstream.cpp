@@ -120,6 +120,7 @@ AudioFstream::AudioFstream( const string filename,
     rNom = 1.0;
     vrs = nullptr;
     posC = 0.0;
+    drainEndContent = 0.0;
     pendingIdx.store(-1);
     holdingIdx.store(-1);
     resultReady.store(false);
@@ -1071,6 +1072,7 @@ namespace {
 const int64_t INF_SAMPLES = INT64_MAX / 4;
 const double FEED_LEAD = 64.0;             // demand feeding's initial lead (input frames)
 const size_t MAX_CHUNK = 8192;             // frames offered to soxr per call
+const double DRAIN_TAIL = 32.0;            // input samples of ring-out kept after the content end (T7-1)
 
 double nowMs()
 {
@@ -1120,6 +1122,7 @@ void AudioFstream::resetFeedState()
     resetAfterStart = false;
     wrapFailed = false;
     fadeOutLeft = fadeOutLen = 0;
+    drainEndContent = 0.0;
     nEvents = 0;
     invViolations = 0;
     lastProduced = 0;
@@ -2007,6 +2010,9 @@ void AudioFstream::enterPastEnd(bool drain)
         outPlay = false;
     } else {
         ev(EvType::END, (int64_t)pos());
+        // everything fed since the start (cache, decoder, pad) is content: the drain plays
+        // until the output's content position has passed it (E13 "the output still playing the tail")
+        drainEndContent = (double)originAbs + sumIdone;
         if (wrapFailed) {
             fadeOutLen = fadeOutLeft = std::max<int64_t>(64, (int64_t)(fifo() / rNom));
         }
@@ -2282,7 +2288,8 @@ size_t AudioFstream::process(float* out, size_t frames, double ratio, const Live
         }
     }
 
-    if (psState == Ps::PLAY && outPlay) {
+    const bool playedThisCall = (psState == Ps::PLAY && outPlay);
+    if (playedThisCall) {
         // the working ratio, every period (G12: also restores it after a clear)
         soxr_set_io_ratio(vrs, ratio, frames);
         lastRatio = ratio;
@@ -2317,11 +2324,23 @@ size_t AudioFstream::process(float* out, size_t frames, double ratio, const Live
             done += odone;
         }
     }
-    // the drain after a true end (E13): the output still plays soxr's tail
+    // the drain after a true end (E13): the output still plays soxr's tail. soxr's NULL flush
+    // is not used: in VR mode it stops short of the content (at r ~ 1 the last ~8 samples never
+    // came out, T7-1). Silence is fed instead, the ratio and pos() keep running, and E21 fires
+    // where the output's content position has passed the end plus a short ring-out.
     if (psState == Ps::PASTEND && feedSrc == Feed::DRAIN) {
-        while (done < frames) {
-            size_t odone = 0;
-            soxr_process(vrs, nullptr, 0, nullptr, out + done * ch, frames - done, &odone);
+        if (!playedThisCall) {
+            soxr_set_io_ratio(vrs, ratio, frames);
+            lastRatio = ratio;
+            sumRN += ratio * (double)frames;
+        }
+        const double p0 = pos() - ratio * (double)frames;   // content at this period's first frame
+        const double stopAt = drainEndContent + DRAIN_TAIL;
+        const double kStopD = std::ceil((stopAt - p0) / std::max(ratio, 1e-9));
+        const size_t kStop = kStopD <= (double)done ? done : (size_t)std::min(kStopD, (double)frames);
+        for (int guard = 0; done < kStop && guard < 64; guard++) {
+            size_t idone = 0, odone = 0;
+            soxr_process(vrs, zeros.data(), MAX_CHUNK, &idone, out + done * ch, kStop - done, &odone);
             if (fadeOutLeft > 0) {
                 for (size_t k = 0; k < odone; k++) {
                     const float g = fadeOutLeft > 0 ? (float)fadeOutLeft / (float)fadeOutLen : 0.0f;
@@ -2332,15 +2351,15 @@ size_t AudioFstream::process(float* out, size_t frames, double ratio, const Live
                 memset(out + done * ch, 0, odone * ch * sizeof(float));
             }
             done += odone;
-            if (odone == 0) {
-                // E21
-                feedSrc = Feed::ENDED;
-                outPlay = false;
-                wrapFailed = false;
-                ev(EvType::DRAINED);
-                post(JobKind::RESET);
-                break;
-            }
+            if (odone == 0 && idone == 0) break;
+        }
+        if (kStopD <= (double)frames) {
+            // E21
+            feedSrc = Feed::ENDED;
+            outPlay = false;
+            wrapFailed = false;
+            ev(EvType::DRAINED);
+            post(JobKind::RESET);
         }
     }
     lastProduced = done;

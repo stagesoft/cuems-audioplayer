@@ -192,7 +192,79 @@ TEST(SoxrFeeding, TheEndDrainDeliversTheTail) {
             g.period();
             produced += (long)g.s.lastPeriodProduced();
         }
+        // all of the content, plus the drain's short ring-out (DRAIN_TAIL = 32 input samples,
+        // T7-1); an exact count was the wrong gate: soxr's VR flush matched it and still cut
+        // the last samples (the content test below checks which samples come out)
         const double expected = 576000.0 * outRate / 48000.0;
-        EXPECT_LE(std::fabs(produced - expected), 2.0) << "produced " << produced;
+        const double tail = 32.0 * outRate / 48000.0;
+        EXPECT_GE(produced, expected - 0.5) << "produced " << produced;
+        EXPECT_LE(produced, expected + tail + 8.0) << "produced " << produced;
+    }
+}
+
+// T7-1: the end drain must play the content to its last sample. A float32 ramp (value = content
+// index) through the feed engine at r = nominal x {1, 1 + 178 ppm, 1 - 255 ppm}, 48 and 44.1 kHz
+// files, play-once and passes = 3. The ramp line is fitted over the last pass; the output must
+// carry on past the frame where that line reaches index L - 1 (the ring-out of the fixture's own
+// step to silence, never a cut before it), end within a short tail, and be silent after E21.
+// Counting frames alone (the test above) passes a stream whose content is cut: soxr's VR flush
+// stopped about 8 samples short at r ~ 1.
+TEST(SoxrFeeding, TheEndDrainPlaysTheLastContentSample) {
+    const long L = 30000;
+    const double scale = 0.8;
+    for (unsigned fileRate : {48000u, 44100u}) {
+        std::vector<float> ramp((size_t)L);
+        for (long i = 0; i < L; i++) ramp[(size_t)i] = (float)(scale * (i + 0.5) / L);
+        const std::string path = tmpPath("t71ramp" + std::to_string(fileRate));
+        writeWavF32(path, fileRate, 1, ramp);
+        for (int passes : {1, 3}) {
+            for (double ppm : {0.0, 178.0, -255.0}) {
+                SCOPED_TRACE("file " + std::to_string(fileRate) + " passes " + std::to_string(passes) +
+                             " ppm " + std::to_string(ppm));
+                Rig g;
+                ASSERT_TRUE(g.open(path, false, 48000));
+                const double rr = g.r * (1.0 + ppm * 1e-6);
+                if (passes == 1) g.s.setLoop(1, 0, 0);
+                else g.s.setLoop(passes, L, fileRate);
+                g.s.start(0, A::StartKind::REVEAL);
+                std::vector<float> outAll;
+                long afterEnd = -1;
+                for (long k = 0; k < 20000; k++) {
+                    g.period(rr);
+                    outAll.insert(outAll.end(), g.out.begin(), g.out.begin() + g.N);
+                    if (afterEnd < 0 && g.s.ps() == A::Ps::PASTEND && g.s.feed() == A::Feed::ENDED) afterEnd = k;
+                    if (afterEnd >= 0 && k >= afterEnd + 3) break;
+                }
+                ASSERT_GE(afterEnd, 0) << "the drain never completed (E21)";
+                const long n = (long)outAll.size();
+                // the last pass starts after the last wrap: a drop of more than half the ramp over 8
+                // frames after which the ramp resumes (the final step to silence is not a wrap)
+                long s0 = 0;
+                int wraps = 0;
+                for (long k = 8; k + 400 < n; k++) {
+                    if (outAll[(size_t)k - 8] - outAll[(size_t)k] > 0.4 && k - s0 > 1000 &&
+                        outAll[(size_t)k + 400] > 0.005f) { s0 = k; wraps++; }
+                }
+                EXPECT_EQ(wraps, passes - 1);
+                const long a0 = s0 + (long)(0.2 * L / rr), a1 = s0 + (long)(0.8 * L / rr);
+                ASSERT_LT(a1, n);
+                double sx = 0, sy = 0, sxx = 0, sxy = 0;
+                for (long k = a0; k < a1; k++) {
+                    const double y = outAll[(size_t)k] / scale * L - 0.5;
+                    sx += k; sy += y; sxx += (double)k * k; sxy += k * y;
+                }
+                const double m = (double)(a1 - a0);
+                const double b = (m * sxy - sx * sy) / (m * sxx - sx * sx), a = (sy - b * sx) / m;
+                const double lineEnd = ((double)(L - 1) - a) / b;    // output frame of content L - 1
+                long lastNZ = -1;
+                for (long k = n - 1; k >= 0; k--) {
+                    if (std::fabs(outAll[(size_t)k]) > 1e-6f) { lastNZ = k; break; }
+                }
+                EXPECT_GE((double)lastNZ, lineEnd + 16.0)
+                    << "the output stops " << lineEnd - lastNZ << " frames before the content's last sample";
+                EXPECT_LE((double)lastNZ, lineEnd + 64.0) << "tail " << lastNZ - lineEnd << " frames";
+            }
+        }
+        std::remove(path.c_str());
     }
 }
