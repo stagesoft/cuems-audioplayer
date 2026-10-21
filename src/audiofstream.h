@@ -102,6 +102,8 @@ class AudioFstream
         // after open(), at the file rate) of the first sample delivered since
         // open() or the last seek; INT64_MIN if unknown.
         int64_t getFirstDeliveredSample() const;
+        // open() set AVDISCARD_ALL on every stream but the audio one (I5)
+        bool demuxDiscardsNonAudio() const { return discardSet; }
 
     private:
         // cuems-mediadecoder members
@@ -131,6 +133,8 @@ class AudioFstream
         int64_t lastFrameTs;         // timestamp of the last decoded frame (its pts)
         int64_t firstDeliveredSample;
         bool firstDeliveredKnown;
+        bool fromFirstPacket;        // the next first delivery follows a first-packet seek
+        bool discardSet;
         bool errorState;
         streamsize lastBytesRead;
         

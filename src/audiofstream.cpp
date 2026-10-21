@@ -100,6 +100,8 @@ AudioFstream::AudioFstream( const string filename,
     resampleInputBuffer = nullptr;
     resampleOutputBuffer = nullptr;
     resampleBufferSize = 0;
+    fromFirstPacket = false;
+    discardSet = false;
 
     if ( !filename.empty() ) {
         open(filename, openmode);
@@ -282,6 +284,15 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
     // The open-time seek to the first audio packet: records the first pts
     // every wrap seek must land on, and makes matroska parse its cues now
     // rather than inside the first real seek (plan rev 3, section 4.3h E1).
+    // Only the audio stream is demuxed (I5): the audio callback no longer
+    // reads every interleaved video packet, and a seek re-reads no GOP
+    for (unsigned i = 0; i < formatContext->nb_streams; i++) {
+        if ((int)i != audioStreamIndex) {
+            formatContext->streams[i]->discard = AVDISCARD_ALL;
+        }
+    }
+    discardSet = true;
+
     if (!firstPacketSeek(true)) {
         cleanupFFmpeg();
         errorState = true;
@@ -460,7 +471,12 @@ bool AudioFstream::refillConversionBuffer()
                 contentStartTs = (lastFrameTs == AV_NOPTS_VALUE) ? AV_NOPTS_VALUE :
                     lastFrameTs + av_rescale_q(discarded, (AVRational){1, (int)fileSampleRate}, st->time_base);
             }
-            const int64_t at = tsToFileSample(lastFrameTs);
+            // After a first-packet seek the first delivered sample IS content
+            // sample 0 (the same first packet, the same decode, the landing pts
+            // asserted): never re-derived from a pts, which a 1 ms timebase
+            // (webm) puts up to 24 samples off at every wrap
+            const int64_t at = fromFirstPacket ? -discarded : tsToFileSample(lastFrameTs);
+            fromFirstPacket = false;
             firstDeliveredSample = (at == INT64_MIN) ? INT64_MIN : at + discarded;
         }
         decodedFrames += out_samples - discarded;
@@ -517,6 +533,7 @@ bool AudioFstream::firstPacketSeek(bool atOpen)
     pendingDiscard = 0;
     firstDeliveredKnown = false;
     firstDeliveredSample = INT64_MIN;
+    fromFirstPacket = true;
     
     while (true) {
         ret = fileReader.readPacket(packet);
@@ -746,6 +763,7 @@ void AudioFstream::seekg(long long pos, ios_base::seekdir dir)
     pendingDiscard = 0;
     firstDeliveredKnown = false;
     calibratePending = false;
+    fromFirstPacket = false;
     
     // Reset resampler state if active (critical for looping/seeking)
     if (resamplingEnabled && resampler) {
