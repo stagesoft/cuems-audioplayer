@@ -1,3 +1,12 @@
+cuems-audioplayer (0.0.3-13~pre869ejxng3.3) bookworm; urgency=medium
+
+  * TEST BUILD, not a release: as .2 plus a540ef6, cuems-mediadecoder 8f5c3c6
+    zero-initialises the channel layouts in createSwrContextExplicit (T7-7: the
+    player aborted at arm on MP3, Vorbis and Opus files - av_channel_layout_copy
+    uninit'd an uninitialised destination).
+
+ -- Ion Reguera <ion@stagelab.coop>  Wed, 21 Oct 2026 21:05:00 +0200
+
 cuems-audioplayer (0.0.3-13~pre869ejxng3.2) bookworm; urgency=medium
 
   * TEST BUILD, not a release: as .1 plus 07df374, the end drain plays the
