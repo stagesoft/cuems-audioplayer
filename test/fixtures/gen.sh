@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # SPDX-FileContributor: Ion Reguera <ion@stagelab.coop>
 #
-# Regenerates test/fixtures/mediadecoder_fixtures.h: short 440 Hz sines at -30 dBFS encoded with every codec
+# Regenerates test/fixtures/mediadecoder_fixtures.h: short, quiet 440 Hz sines encoded with every codec
 # whose FFmpeg decoder reports a known channel layout (the class that crashed on mediadecoder f83ce02,
 # see test_mediadecoder_layout.cpp), plus a PCM WAV control (UNSPEC layout), embedded as C arrays so the
 # test needs no external files (python3 does the embedding; casas has no xxd). Run from this directory on casas
@@ -12,7 +12,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 F="ffmpeg -hide_banner -loglevel error -y -bitexact"
-src() { echo "sine=f=440:d=$1:sample_rate=$2,volume=-27dB"; }   # lavfi sine is -3 dBFS: -27 dB -> -30 dBFS
+src() { echo "sine=f=440:d=$1:sample_rate=$2,volume=-27dB"; }   # lavfi's sine is -18 dBFS peak: about -48 dBFS (the level does not matter to the test)
 $F -f lavfi -i "$(src 0.3 44100)" -ac 1 -c:a libmp3lame -b:a 32k -write_xing 0 -id3v2_version 0 "$T/fx_mp3.mp3"
 $F -f lavfi -i "$(src 0.3 22050)" -ac 1 -c:a libvorbis -q:a 0 "$T/fx_vorbis.ogg"
 $F -f lavfi -i "$(src 0.3 48000)" -ac 1 -c:a libopus -b:a 24k "$T/fx_opus.opus"
