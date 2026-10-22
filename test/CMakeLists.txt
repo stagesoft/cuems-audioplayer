@@ -1,3 +1,4 @@
+# SPDX-FileContributor: Ion Reguera <ion@stagelab.coop>
 cmake_minimum_required(VERSION 3.10)
 
 # Find Google Test
@@ -30,6 +31,7 @@ add_executable(audioplayer_tests
     test_commandlineparser.cpp
     test_audiofstream.cpp
     test_audioplayer.cpp
+    test_mediadecoder_layout.cpp
     test_main.cpp
     # Source files needed for testing
     ../src/commandlineparser.cpp
