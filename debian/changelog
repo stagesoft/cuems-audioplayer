@@ -1,3 +1,28 @@
+cuems-audioplayer (0.0.3-13) bookworm; urgency=high
+
+  * Hotfix: AudioCues on compressed audio aborted at arm. cuems-mediadecoder's
+    createSwrContextExplicit copied into an uninitialised AVChannelLayout, and
+    av_channel_layout_copy() uninits its destination, so stack garbage that
+    read as a CUSTOM layout was free()d: SIGABRT/SIGSEGV when the cue was
+    armed, a silent cue and a core dump. It hits every file whose decoder
+    reports a known channel layout (MP3, Ogg/Vorbis, Opus, FLAC, ALAC, AAC,
+    PCM in MOV, audio in MP4/MKV/MOV); PCM in WAV/AVI/MKV was immune. Whether
+    a build aborted depended on stack contents: 0.0.3-11 and 0.0.3-12 abort
+    on MP3, Vorbis and Opus every time. Every release since at least 0.0.3-9
+    carries it (mediadecoder pin f83ce02).
+  * cuems-mediadecoder bumped f83ce02 -> 8f5c3c6 (f83ce02 plus the fix only:
+    both layouts zero-initialised).
+  * New regression test MediaDecoderLayout.ResamplerSetupSurvivesAGarbageStack
+    (embedded fixtures, test/fixtures/gen.sh): red by a signal on f83ce02,
+    green on 8f5c3c6. Tests are off in this package build: run the suite and
+    the 50-arm matrix on .111 before a release (see CLAUDE.md).
+  * Venue-visible: cues on such files that never played (silent, a core each
+    time) will now play, at the volume and timing they were authored with.
+  * Rig evidence: cuems-RELATIONS baselines/hotfix-0.0.3-13-chlayout, plan
+    Plans/2026-10-22-audioplayer-chlayout-abort-hotfix.md.
+
+ -- Ion Reguera <ion@stagelab.coop>  Thu, 22 Oct 2026 15:22:33 +0200
+
 cuems-audioplayer (0.0.3-12) bookworm; urgency=medium
 
   * End-of-file limit in output-channel bytes (1amfwm7e4wv). The stream
