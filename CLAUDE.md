@@ -59,7 +59,31 @@ This makes the player **self-gating**: it can follow MTC early and auto-start at
 `start_mtc`, so the engine's per-cue reveal OSC becomes optional (kept as
 belt-and-suspenders until the fleet runs the fixed binary).
 
+**Looping audio with video: the guarantee (Ion, 2026-10-19).** Audio and video stay in
+sync across the passes of a loop **only if (A) their durations are exactly the same, or
+(B) they are in the same container** (one file; this player extracts the audio). Two
+separate files of different lengths drift apart by the difference on every pass: an
+operator error, not a bug. Audio extracted from a video into a separate file keeps that
+video's audio-stream length (the VideoCue's period is its container's audio length), so that
+pair stays together; a video-only file next to an audio file of another length does not. The
+gapless, MTC-locked loop with one period per file is rev 3 of 869ejxng3 + 1amfwm7e6cw
+(`cuems-RELATIONS/Plans/2026-10-19-audio-loop-varispeed-869ejxng3-1amfwm7e6cw.md`).
+
 ## Field notes / gotchas
+
+- **Compressed audio aborted at arm until 0.0.3-13 (2026-10-22).** cuems-mediadecoder's
+  `createSwrContextExplicit()` copied into an uninitialised `AVChannelLayout`; `av_channel_layout_copy()`
+  uninits its destination, so stack garbage reading as a CUSTOM layout was `free()`d. Every release since at
+  least 0.0.3-9 aborted on AudioCues whose decoder reports a known channel layout (MP3, Vorbis, Opus, FLAC,
+  ALAC, AAC, PCM in MOV, audio in MP4/MKV); PCM in WAV/AVI/MKV (UNSPEC) was immune, and whether a given binary
+  hit it depended on stack contents (0.0.3-12: MP3/Vorbis/Opus 50/50, AAC survived). Fixed by the pin
+  `8f5c3c6`. Guarded by `MediaDecoderLayout.ResamplerSetupSurvivesAGarbageStack` (embedded fixtures,
+  `test/fixtures/gen.sh`).
+- **Run the suite and the 50-arm matrix on .111 before any release or mediadecoder pin bump.** There is no
+  CI, and `debian/rules` builds with tests off, so nothing runs the regression test unless you do:
+  `audioplayer_tests` plus `cuems-RELATIONS/baselines/hotfix-0.0.3-13-chlayout/t77_matrix.sh`.
+- **`.gitmodules` says `branch = ffmpeg-4.0` for cuems-mediadecoder** (`740e733`, without the fix):
+  `git submodule update --remote` would silently move the pin there. Bump pins explicitly.
 
 - **A re-sync is an 80 ms jump.** The player follows MTC within 2 frames
   (`MTC_FRAMES_TOLERANCE`); beyond that it seeks to the MTC position, skipping
