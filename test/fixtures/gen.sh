@@ -11,15 +11,16 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
-F="ffmpeg -hide_banner -loglevel error -y -bitexact"
+F="ffmpeg -hide_banner -loglevel error -y"
+BX="-fflags +bitexact -flags:a +bitexact"   # OUTPUT options: deterministic muxer serials/UIDs, so a re-run reproduces the bytes
 src() { echo "sine=f=440:d=$1:sample_rate=$2,volume=-27dB"; }   # lavfi's sine is -18 dBFS peak: about -48 dBFS (the level does not matter to the test)
-$F -f lavfi -i "$(src 0.3 44100)" -ac 1 -c:a libmp3lame -b:a 32k -write_xing 0 -id3v2_version 0 "$T/fx_mp3.mp3"
-$F -f lavfi -i "$(src 0.3 22050)" -ac 1 -c:a libvorbis -q:a 0 "$T/fx_vorbis.ogg"
-$F -f lavfi -i "$(src 0.3 48000)" -ac 1 -c:a libopus -b:a 24k "$T/fx_opus.opus"
-$F -f lavfi -i "$(src 0.3 48000)" -ac 1 -c:a libopus -b:a 24k -f webm "$T/fx_webm_opus.weba"
-$F -f lavfi -i "$(src 0.25 8000)" -ac 1 -c:a flac "$T/fx_flac.flac"
-$F -f lavfi -i "$(src 0.3 22050)" -ac 1 -c:a aac -b:a 24k "$T/fx_aac.m4a"
-$F -f lavfi -i "$(src 0.25 8000)" -ac 1 -c:a pcm_s16le "$T/fx_pcm.wav"
+$F -f lavfi -i "$(src 0.3 44100)" $BX -ac 1 -c:a libmp3lame -b:a 32k -write_xing 0 -id3v2_version 0 "$T/fx_mp3.mp3"
+$F -f lavfi -i "$(src 0.3 22050)" $BX -ac 1 -c:a libvorbis -q:a 0 "$T/fx_vorbis.ogg"
+$F -f lavfi -i "$(src 0.3 48000)" $BX -ac 1 -c:a libopus -b:a 24k "$T/fx_opus.opus"
+$F -f lavfi -i "$(src 0.3 48000)" $BX -ac 1 -c:a libopus -b:a 24k -f webm "$T/fx_webm_opus.weba"
+$F -f lavfi -i "$(src 0.25 8000)" $BX -ac 1 -c:a flac "$T/fx_flac.flac"
+$F -f lavfi -i "$(src 0.3 22050)" $BX -ac 1 -c:a aac -b:a 24k "$T/fx_aac.m4a"
+$F -f lavfi -i "$(src 0.25 8000)" $BX -ac 1 -c:a pcm_s16le "$T/fx_pcm.wav"
 OUT=mediadecoder_fixtures.h
 {
   echo "// SPDX-FileCopyrightText: 2026 Stagelab Coop SCCL"
