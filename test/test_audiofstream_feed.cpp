@@ -15,6 +15,10 @@
 #include <algorithm>
 #include <random>
 #include "feed_test_util.h"
+#include <thread>
+#if defined(__SSE2__)
+#include <pmmintrin.h>
+#endif
 
 using namespace feedtest;
 
@@ -625,6 +629,31 @@ TEST_F(FeedEngine, DrainThenResetThenACleanRestart) {
     for (float v : g.out) peak = std::max(peak, std::fabs(v));
     EXPECT_LE(peak, 1.0f);
     EXPECT_EQ(g.s.invariantViolations(), 0);
+}
+
+// T7-14: the feed engine runs its period with denormals flushed (FTZ + DAZ) on
+// the calling thread, so a fade to digital silence does not drive the VR
+// resampler's filter state into the denormal range (~40x soxr cost measured on
+// the rig: 3-4.5 ms per 512-frame period at the end of a faded song).
+TEST_F(FeedEngine, ProcessRunsWithDenormalsFlushed) {
+#if defined(__SSE2__)
+    std::thread t([] {
+        _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_OFF);
+        _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_OFF);
+        Rig g;
+        ASSERT_TRUE(g.open(fixturePath("a.wav")));
+        g.s.setLoop(1, 0, 0);
+        g.s.start(0, A::StartKind::REVEAL);
+        g.period();
+        EXPECT_EQ(_MM_GET_FLUSH_ZERO_MODE(), (unsigned)_MM_FLUSH_ZERO_ON);
+        EXPECT_EQ(_MM_GET_DENORMALS_ZERO_MODE(), (unsigned)_MM_DENORMALS_ZERO_ON);
+        volatile float tiny = 1e-39f;          // a denormal input is read as zero
+        EXPECT_EQ(tiny * 1.0f, 0.0f);
+    });
+    t.join();
+#else
+    GTEST_SKIP() << "x86 SSE only";
+#endif
 }
 
 // T7-12: a file shorter than the re-enable margin (341 + 80 ms) in once mode,
