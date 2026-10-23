@@ -1,3 +1,12 @@
+cuems-audioplayer (0.0.3-14~pre869ejxng3.5) bookworm; urgency=medium
+
+  * TEST BUILD, not a release: as .4, plus T7-12 (feature 598c174): the
+    PASTEND re-enable margin is capped at half the file, so a loop shorter
+    than 341 + 80 ms (the tiny-loop guard's legacy fallback) is re-enabled
+    by every per-pass /offset_i instead of going silent after pass 2.
+
+ -- Ion Reguera <ion@stagelab.coop>  Fri, 23 Oct 2026 15:00:21 +0200
+
 cuems-audioplayer (0.0.3-14~pre869ejxng3.4) bookworm; urgency=medium
 
   * TEST BUILD, not a release: as .3, with debian/bookworm (the released
