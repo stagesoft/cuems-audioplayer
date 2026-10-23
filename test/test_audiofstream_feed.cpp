@@ -627,6 +627,40 @@ TEST_F(FeedEngine, DrainThenResetThenACleanRestart) {
     EXPECT_EQ(g.s.invariantViolations(), 0);
 }
 
+// T7-12: a file shorter than the re-enable margin (341 + 80 ms) in once mode,
+// re-enabled at every pass by the engine's legacy per-pass /offset_i (the
+// tiny-loop guard turned wrapping off). The fixed margin made e - margin
+// negative, so every re-enable after the first was refused and the cue went
+// silent; the margin is now capped at half the file. A target near the end is
+// still refused.
+TEST_F(FeedEngine, TinyFileIsReenabledByEveryPerPassOffset) {
+    const std::string p = tmpPath("tiny50ms");
+    const long L = 2400;                           // 50 ms at 48 kHz
+    std::vector<float> x(L);
+    for (long i = 0; i < L; i++) x[i] = 0.5f * (float)std::sin(2.0 * M_PI * 1000.0 * i / 48000.0);
+    writeWavF32(p, 48000, 1, x);
+    Rig g;
+    ASSERT_TRUE(g.open(p));
+    g.s.setLoop(1, 0, 0);
+    g.s.start(0, A::StartKind::REVEAL);
+    g.runToEnd();
+    ASSERT_EQ(g.s.ps(), A::Ps::PASTEND);
+    EXPECT_FALSE(g.s.reenable(L - 10));            // too close to the end: stays ended
+    const int passes = 6;
+    for (int pass = 2; pass <= passes; pass++) {
+        SCOPED_TRACE(pass);
+        g.ctx.target = 0;
+        ASSERT_TRUE(g.s.reenable(0));
+        g.s.start(0, A::StartKind::REENABLE);
+        ASSERT_TRUE(g.untilPlay());
+        g.runToEnd();
+        ASSERT_EQ(g.s.ps(), A::Ps::PASTEND);
+    }
+    EXPECT_EQ((long)(g.tap.v.size() / g.ch), passes * L);
+    EXPECT_EQ(g.s.invariantViolations(), 0);
+    std::remove(p.c_str());
+}
+
 // h.2: a job superseded between its steps hands back with soxr FED and dec
 // MID (T1, N13); the next start goes through a RESET again.
 TEST_F(FeedEngine, AnAbandonedJobLeavesTheStateDirty) {
