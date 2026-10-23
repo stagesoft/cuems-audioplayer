@@ -42,6 +42,9 @@
 #include <cmath>
 #include <chrono>
 #include <algorithm>
+#if defined(__SSE2__)
+#include <pmmintrin.h>
+#endif
 
 extern "C" {
 #include <libavutil/intreadwrite.h>
@@ -2244,6 +2247,15 @@ void AudioFstream::consumeInput(size_t n)
 
 size_t AudioFstream::process(float* out, size_t frames, double ratio, const LiveCtx& ctx)
 {
+#if defined(__SSE2__)
+    // Flush denormals on the audio thread (T7-14): when a file fades to digital
+    // silence the VR resampler's filter state decays through the denormal range
+    // and soxr_process costs ~40x (3-4.5 ms of a 10.7 ms period on the N97, for
+    // the last ~3 s of every such pass). MXCSR is per thread; setting it here
+    // covers whatever thread runs the callback, at no measurable cost.
+    _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
+    _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+#endif
     const unsigned ch = fileChannels;
     size_t done = 0;
     lastProduced = 0;
