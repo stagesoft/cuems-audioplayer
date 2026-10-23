@@ -2075,8 +2075,13 @@ bool AudioFstream::reenable(int64_t target)
 {
     if (psState != Ps::PASTEND) return false;
     const bool morePasses = (loopPasses <= 0 && passesAtEnd > 0) || (passesAtEnd > 0 && loopPasses > passesAtEnd);
-    const int64_t margin = 341 + (int64_t)fileSampleRate * 80 / 1000;
+    // The margin keeps a target just before the end from re-arming a pass that
+    // would end at once. Capped at half the file: a file shorter than the fixed
+    // margin (the tiny-loop guard's legacy fallback, T7-12) is otherwise never
+    // re-enabled by the per-pass /offset_i.
     const int64_t e = endSamples();
+    int64_t margin = 341 + (int64_t)fileSampleRate * 80 / 1000;
+    if (e < INF_SAMPLES) margin = std::min(margin, e / 2);
     if (morePasses || (e < INF_SAMPLES && target < e - margin) || e >= INF_SAMPLES) {
         psState = Ps::HOLD;
         outPlay = false;
