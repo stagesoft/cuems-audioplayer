@@ -1,3 +1,12 @@
+cuems-audioplayer (0.0.3-14~pre869ejxng3.6) bookworm; urgency=medium
+
+  * TEST BUILD, not a release: as .5, with T7-12 reworked (feature d2edcc9,
+    d03720e): the re-enable margin is clamp(end - fixed, 0, fixed), so it never
+    reaches into the file's first 341 + 80 ms. The .5 cap at half the file
+    still refused the rig's latency-shifted targets on a 50 ms loop.
+
+ -- Ion Reguera <ion@stagelab.coop>  Fri, 23 Oct 2026 15:15:27 +0200
+
 cuems-audioplayer (0.0.3-14~pre869ejxng3.5) bookworm; urgency=medium
 
   * TEST BUILD, not a release: as .4, plus T7-12 (feature 598c174): the
