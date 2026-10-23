@@ -660,7 +660,7 @@ TEST_F(FeedEngine, TinyFileIsReenabledByEveryPerPassOffset) {
         g.runToEnd();
         ASSERT_EQ(g.s.ps(), A::Ps::PASTEND);
     }
-    EXPECT_EQ((long)(g.tap.v.size() / g.ch), 2 * L + (L - 1700) + (L - 2000) + 10);
+    EXPECT_EQ((long)(g.tap.v.size() / g.ch), 3 * L + (L - 1700) + (L - 2000) + 10);   // the reveal, two at 0, three late
     EXPECT_EQ(g.s.invariantViolations(), 0);
     std::remove(p.c_str());
     // a long file keeps the full margin: a target 50 ms before its end stays ended
