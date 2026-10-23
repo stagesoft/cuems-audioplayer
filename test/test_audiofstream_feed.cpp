@@ -631,8 +631,10 @@ TEST_F(FeedEngine, DrainThenResetThenACleanRestart) {
 // re-enabled at every pass by the engine's legacy per-pass /offset_i (the
 // tiny-loop guard turned wrapping off). The fixed margin made e - margin
 // negative, so every re-enable after the first was refused and the cue went
-// silent; the margin is now capped at half the file. A target near the end is
-// still refused.
+// silent. The margin no longer reaches into the file's first 341 + 80 ms, so
+// any target inside a tiny file re-enables it (the rig's targets carry ~32 ms
+// of latency: 30-45 ms into a 50 ms file); a target at the end still does not,
+// and a long file keeps the full margin.
 TEST_F(FeedEngine, TinyFileIsReenabledByEveryPerPassOffset) {
     const std::string p = tmpPath("tiny50ms");
     const long L = 2400;                           // 50 ms at 48 kHz
@@ -645,20 +647,31 @@ TEST_F(FeedEngine, TinyFileIsReenabledByEveryPerPassOffset) {
     g.s.start(0, A::StartKind::REVEAL);
     g.runToEnd();
     ASSERT_EQ(g.s.ps(), A::Ps::PASTEND);
-    EXPECT_FALSE(g.s.reenable(L - 10));            // too close to the end: stays ended
+    EXPECT_FALSE(g.s.reenable(L));                 // at the end: stays ended
     const int passes = 6;
+    const int64_t targets[] = {0, 0, 1700, 2000, L - 10};   // 0, 0, 35, 42 ms, 10 samples before the end
     for (int pass = 2; pass <= passes; pass++) {
         SCOPED_TRACE(pass);
-        g.ctx.target = 0;
-        ASSERT_TRUE(g.s.reenable(0));
-        g.s.start(0, A::StartKind::REENABLE);
+        const int64_t t = targets[pass - 2];
+        g.ctx.target = t;
+        ASSERT_TRUE(g.s.reenable(t));
+        g.s.start(t, A::StartKind::REENABLE);
         ASSERT_TRUE(g.untilPlay());
         g.runToEnd();
         ASSERT_EQ(g.s.ps(), A::Ps::PASTEND);
     }
-    EXPECT_EQ((long)(g.tap.v.size() / g.ch), passes * L);
+    EXPECT_EQ((long)(g.tap.v.size() / g.ch), 2 * L + (L - 1700) + (L - 2000) + 10);
     EXPECT_EQ(g.s.invariantViolations(), 0);
     std::remove(p.c_str());
+    // a long file keeps the full margin: a target 50 ms before its end stays ended
+    Rig h;
+    ASSERT_TRUE(h.open(fixturePath("a.wav")));
+    h.s.setLoop(1, 0, 0);
+    h.s.start(0, A::StartKind::REVEAL);
+    h.runToEnd();
+    ASSERT_EQ(h.s.ps(), A::Ps::PASTEND);
+    EXPECT_FALSE(h.s.reenable(576000 - 2400));
+    EXPECT_TRUE(h.s.reenable(576000 - 4181 - 1));
 }
 
 // h.2: a job superseded between its steps hands back with soxr FED and dec
