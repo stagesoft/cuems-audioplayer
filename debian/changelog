@@ -1,3 +1,12 @@
+cuems-audioplayer (0.0.3-14~pre869ejxng3.7) bookworm; urgency=medium
+
+  * TEST BUILD, not a release: as .6, plus T7-14 (feature 68b7ab4, test
+    f8e49ed): process() flushes denormals (FTZ + DAZ) on the audio thread; a
+    file fading to digital silence drove the VR resampler into the denormal
+    slow path (~40x soxr cost for the last ~3 s of every such pass).
+
+ -- Ion Reguera <ion@stagelab.coop>  Fri, 23 Oct 2026 17:49:35 +0200
+
 cuems-audioplayer (0.0.3-14~pre869ejxng3.6) bookworm; urgency=medium
 
   * TEST BUILD, not a release: as .5, with T7-12 reworked (feature d2edcc9,
