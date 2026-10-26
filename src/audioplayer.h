@@ -26,6 +26,7 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 */
+// SPDX-FileContributor: Ion Reguera <ion@stagelab.coop>
 
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
@@ -57,6 +58,7 @@
 #include "cuems_errors.h"
 #include "mtcreceiver.h"
 #include "oscreceiver.h"
+#include "dayalign.h"
 
 using namespace std;
 
@@ -88,6 +90,11 @@ class AudioPlayer : public OscReceiver
         // this at startup is the explicitLatencyMs ctor parameter, which
         // must be set before the JACK query runs.
         void setOutputLatencyMs(long ms);
+
+        // Day-alignment log lines (k realign, implausible position,
+        // unresolved offset). The audio callback only sets atomics; call this
+        // from a non-RT thread (main's wait loop).
+        void serviceDayAlignLog();
         ~AudioPlayer( void );
         //////////////////////////////////////////
 
@@ -127,8 +134,11 @@ class AudioPlayer : public OscReceiver
 
         unsigned int headStep = 4;              // Head step per channel, FLOAT32 format, 4 bytes
         std::atomic<long int> headOffset{0};    // Head offset (atomic: read/written from multiple threads)
-        std::atomic <bool> offsetChanged = false;             // Flag to recognise when the offset is OSC changed
-        std::atomic<long int> headNewOffset{0}; // Head offset to update through OSC (atomic for safety)
+        // Latest OSC /offset, raw (engine domain), OSC thread -> audio callback.
+        // The callback converts it into this process's day (24h wrap) before
+        // it becomes headOffset; offsetSeqApplied_ is callback-private.
+        DayAlign::OffsetMailbox offsetMailbox_;
+        unsigned long offsetSeqApplied_ = 0;
         std::atomic<long int> outputLatencyMs_{0}; // JACK output pipeline latency; added to every headOffset compute so audio reaches speakers at wire-MTC (queried once, after startStream)
         long m_explicitLatencyMs;             // -1 = no override, use JACK-queried value. Set once in ctor from the explicitLatencyMs parameter (fed by --output-latency-ms CLI arg from settings.xml).
 
@@ -143,6 +153,24 @@ class AudioPlayer : public OscReceiver
     //////////////////////////////////////////////////////////
     // Private members
     private:
+
+        // Day-alignment evidence, written by the audio callback (atomics
+        // only), logged by serviceDayAlignLog().
+        std::atomic<long> dayK_{0};
+        std::atomic<long long> dayEngineMs_{0};
+        std::atomic<long long> dayHeadMs_{0};
+        std::atomic<unsigned long> dayShifts_{0};          // conversions with k != 0
+        std::atomic<unsigned long> dayEvents_{0};          // bumped after each k != 0
+        std::atomic<long long> offsetUnresolvedSinceMs_{0}; // steady ms, 0 = none
+        std::atomic<long long> implausibleSeekMs_{0};
+        std::atomic<long long> implausibleEndMs_{0};
+        std::atomic<bool> implausibleFlag_{false};
+        bool implausibleReported_ = false;                 // callback-private
+        // serviceDayAlignLog() state (non-RT thread only)
+        unsigned long dayEventsLogged_ = 0;
+        std::vector<long> dayKLogged_;
+        bool unresolvedLogged_ = false;
+        bool implausibleLogged_ = false;
 
         // Config functions, maybe to be implemented
         // bool loadNodeConfig( void );
