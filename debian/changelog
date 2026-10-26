@@ -1,3 +1,15 @@
+cuems-audioplayer (0.0.3-15~pre869ejxng3.9) bookworm; urgency=medium
+
+  * TEST BUILD, not a release: as .8, plus the review fixes of step 5+10
+    (feature a248fe4): the pending start is resolved after the worker
+    hand-back and the OSC events and keeps a REVEAL/RETURN kind that arrived
+    while it was pending; NaN/Inf/huge float starts rejected before the int64
+    cast; DAY_IMPLAUSIBLE/DAY_UNRESOLVED per start value; the /offset_i ERROR
+    throttled to one per 60 s with a count; a test of the production resolver.
+  * Breaks: cuems-engine (= 0.1.0rc6-7~pre869ejxng3.1), unchanged.
+
+ -- Ion Reguera <ion@stagelab.coop>  Mon, 26 Oct 2026 12:04:34 +0100
+
 cuems-audioplayer (0.0.3-15~pre869ejxng3.8) bookworm; urgency=medium
 
   * TEST BUILD, not a release: as .7, plus the day alignment of the cue start
