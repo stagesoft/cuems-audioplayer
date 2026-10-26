@@ -32,6 +32,7 @@ add_executable(audioplayer_tests
     test_audiofstream.cpp
     test_audioplayer.cpp
     test_mediadecoder_layout.cpp
+    test_dayalign.cpp
     test_main.cpp
     # Source files needed for testing
     ../src/commandlineparser.cpp

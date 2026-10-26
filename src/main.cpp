@@ -23,6 +23,7 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 */
+// SPDX-FileContributor: Ion Reguera <ion@stagelab.coop>
 
 //////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////
@@ -365,6 +366,7 @@ int main( int argc, char *argv[] ) {
     // Wait for it to finnish somehow
     while ( !myAudioPlayer->endOfPlay ) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        myAudioPlayer->serviceDayAlignLog();   // the audio callback never logs these itself
     }
 
     logger->logInfo( "End of playing reached, finishing" );
