@@ -40,10 +40,26 @@ inline int64_t normalizeTod(int64_t v, bool* changed)
     return r;
 }
 
-// /start_tod sent as a float (a lenient sender): floored first, then normalised.
-inline int64_t todFromFloat(double f, bool* changed)
+// The largest |ms| a float start may carry (~31 700 years). NaN, Inf or a
+// larger value would make the int64 cast undefined: rejected instead.
+constexpr double MAX_ABS_MS = 1e15;
+
+// floor(f) as int64 ms, false (and *out untouched) for a value that cannot be one.
+inline bool floorMs(double f, int64_t* out)
 {
-    return normalizeTod((int64_t)std::floor(f), changed);
+    if (!std::isfinite(f) || std::fabs(f) > MAX_ABS_MS) return false;
+    *out = (int64_t)std::floor(f);
+    return true;
+}
+
+// /start_tod sent as a float (a lenient sender): floored first, then normalised.
+// False for NaN, Inf or |f| > MAX_ABS_MS: the caller rejects the message.
+inline bool todFromFloat(double f, int64_t* v, bool* changed)
+{
+    int64_t ms = 0;
+    if (!floorMs(f, &ms)) return false;
+    *v = normalizeTod(ms, changed);
+    return true;
 }
 
 // The engine time the raw value refers to (the cue's start), in the sender's
@@ -60,6 +76,27 @@ inline int64_t offsetNsFor(int64_t localStartMs) { return -localStartMs * 100000
 // tod (/start_tod): any k is explained (k = minus this process's day count, or
 // +1 at the wrap edge), so INFO.
 inline bool realignIsWarning(Wire w, int64_t k) { return w == Wire::OFFSET_F && k < 0; }
+
+// The /offset_i ERROR (§7.2: removed, loud on a version mismatch) at most once
+// per `everyNs`: the first message logs at once, later ones one line per window
+// with how many arrived since the previous line. A legacy loop against an old
+// engine would otherwise log one ERROR per pass (8 640 a day at 10 s).
+struct ThrottledCount {
+    int64_t everyNs;
+    int64_t lastNs = INT64_MIN;
+    uint64_t pending = 0;                                // since the last line, this one included
+
+    // True when a line is due; *count = the messages it reports
+    bool hit(int64_t nowNs, uint64_t* count)
+    {
+        pending++;
+        if (lastNs != INT64_MIN && nowNs - lastNs < everyNs) return false;
+        lastNs = nowNs;
+        *count = pending;
+        pending = 0;
+        return true;
+    }
+};
 
 }  // namespace dayalign
 

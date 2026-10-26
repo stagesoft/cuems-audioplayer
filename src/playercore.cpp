@@ -91,9 +91,9 @@ void PlayerCore::applyOsc(const OscEvent& e, const A::LiveCtx& ctx)
         if (e.a != 0) {                                   // E2
             engine_.clearSeekFailed();
             followingMtc_ = true;                         // in every column (T4)
-            lastKind_ = A::StartKind::REVEAL;
+            setKind(A::StartKind::REVEAL);
             if (ps == A::Ps::PASTEND) {
-                if (engine_.reenable(ctx.target)) lastKind_ = A::StartKind::REENABLE;
+                if (engine_.reenable(ctx.target)) setKind(A::StartKind::REENABLE);
             }
         } else {                                          // E3
             followingMtc_ = false;
@@ -101,15 +101,22 @@ void PlayerCore::applyOsc(const OscEvent& e, const A::LiveCtx& ctx)
         }
         break;
     case OscEvent::OFFSET_F:
-    case OscEvent::START_TOD:                             // E4, once the start is in this day
+    case OscEvent::START_TOD: {                           // E4, once the start is in this day
         // the raw value is kept (latest wins) and converted at first use, once
         // the head is authoritative (day alignment §3.3 row 2, §7.2)
+        int64_t raw = e.a;
+        // a float the OSC thread should have rejected (NaN, Inf, huge): ignored
+        // here too, never cast (review finding 2)
+        if (e.type == OscEvent::OFFSET_F && !dayalign::floorMs(e.f, &raw)) break;
         pendWire_ = (e.type == OscEvent::OFFSET_F) ? dayalign::Wire::OFFSET_F : dayalign::Wire::START_TOD;
-        pendRaw_ = (e.type == OscEvent::OFFSET_F) ? (int64_t)std::floor(e.f) : (int64_t)e.a;
+        pendRaw_ = raw;
         pendSinceNs_ = lastNowNs_;
-        unresolvedWarned_ = false;
+        pendKindSeq_ = kindSeq_;
+        unresolvedWarned_ = false;                        // both warnings are per start value: the
+        implausibleWarned_ = false;                       // legacy loop re-sends one every pass
         resolvePendingOffset();
         break;
+    }
     case OscEvent::LOOP: {                                // E5
         const int passes = e.nargs >= 1 ? e.a : 1;
         const int num = e.nargs >= 3 ? e.b : 0;
@@ -117,7 +124,7 @@ void PlayerCore::applyOsc(const OscEvent& e, const A::LiveCtx& ctx)
         lastLoopArgs_[0] = passes; lastLoopArgs_[1] = num; lastLoopArgs_[2] = den;
         engine_.setLoop(passes, num, den);
         if (ps == A::Ps::PASTEND && live_.live()) {
-            if (engine_.reenable(ctx.target)) lastKind_ = A::StartKind::REENABLE;
+            if (engine_.reenable(ctx.target)) setKind(A::StartKind::REENABLE);
         }
         break;
     }
@@ -151,16 +158,18 @@ bool PlayerCore::resolvePendingOffset()
         push(LogEvent::DAY_REALIGN, k, engineMs, lastHeadMs_, (double)dayConversions_, 0, 0,
              w == dayalign::Wire::START_TOD ? 1 : 0);
     }
-    // E4
+    // E4. A follow (E2) or an MTC return (E9) that arrived while the value was
+    // pending set the start's kind after the latch: keep it, do not relabel it
+    // OFFSET (review finding 1)
     engine_.clearSeekFailed();
-    lastKind_ = A::StartKind::OFFSET;
+    if (kindSeq_ == pendKindSeq_) setKind(A::StartKind::OFFSET);
     if (!live_.live()) return true;                       // HOLD by E7/E8: the condition starts it later
     target_ = computeTarget(lastNowNs_);
     const A::Ps ps = engine_.ps();
     if (ps == A::Ps::PLAY || ps == A::Ps::SEEKING) {
         engine_.offsetChanged(target_);
     } else if (ps == A::Ps::PASTEND) {
-        if (engine_.reenable(target_)) lastKind_ = A::StartKind::REENABLE;
+        if (engine_.reenable(target_)) setKind(A::StartKind::REENABLE);
     }
     return true;
 }
@@ -217,22 +226,12 @@ void PlayerCore::callback(float* out, unsigned frames, int64_t nowNs, long headM
         }
     }
     if (ed.returned) {
-        lastKind_ = A::StartKind::RETURN;
+        setKind(A::StartKind::RETURN);
         invalidLogged_ = false;
         push(LogEvent::MTC_RETURN);
     }
     if (live_.state() == Mtc::SUSPENDED) suspendedPeriods_++;
     if (live_.live()) target_ = computeTarget(nowNs);
-    // a start still waiting for an authoritative head (day alignment)
-    if (pendWire_ != dayalign::Wire::NONE) {
-        resolvePendingOffset();
-        if (pendWire_ != dayalign::Wire::NONE && !unresolvedWarned_ && live_.live() &&
-            nowNs - pendSinceNs_ > UNRESOLVED_WARN_NS) {   // logging 3
-            unresolvedWarned_ = true;
-            push(LogEvent::DAY_UNRESOLVED, pendRaw_, (nowNs - pendSinceNs_) / 1000000, 0, 0, 0, 0,
-                 pendWire_ == dayalign::Wire::START_TOD ? 1 : 0);
-        }
-    }
     A::LiveCtx ctx;
     ctx.target = target_;
     ctx.mtcLive = live_.live();
@@ -245,6 +244,19 @@ void PlayerCore::callback(float* out, unsigned frames, int64_t nowNs, long headM
     while (osc_.pop(oe)) {
         applyOsc(oe, ctx);
         ctx.target = target_;
+    }
+
+    // a start still waiting for an authoritative head (day alignment): resolved
+    // here, after the worker's hand-back and the OSC events, so E4 runs where an
+    // OSC event's cell runs (review finding 1)
+    if (pendWire_ != dayalign::Wire::NONE) {
+        resolvePendingOffset();
+        if (pendWire_ != dayalign::Wire::NONE && !unresolvedWarned_ && live_.live() &&
+            nowNs - pendSinceNs_ > UNRESOLVED_WARN_NS) {   // logging 3
+            unresolvedWarned_ = true;
+            push(LogEvent::DAY_UNRESOLVED, pendRaw_, (nowNs - pendSinceNs_) / 1000000, 0, 0, 0, 0,
+                 pendWire_ == dayalign::Wire::START_TOD ? 1 : 0);
+        }
     }
 
     // 4. the start condition (h.3)

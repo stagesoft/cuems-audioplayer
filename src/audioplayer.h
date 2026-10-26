@@ -126,6 +126,7 @@ class AudioPlayer : public OscReceiver
         std::atomic<long> outputLatencyFrames_{0};
         long m_explicitLatencyMs;               // -1 = no override, use JACK's value
         TickSample lastTick_;                   // the audio thread's last seqlock read
+        dayalign::ThrottledCount offsetIErrors_{60000000000LL};   // /offset_i: one ERROR per 60 s (OSC thread)
         int64_t latencyNs( void ) const;
 
         //////////////////////////////////////////////////////////
