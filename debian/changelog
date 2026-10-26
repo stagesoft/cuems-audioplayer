@@ -1,3 +1,14 @@
+cuems-audioplayer (0.0.3-14~pre1amfwm7fbqy.2) bookworm; urgency=medium
+
+  * TEST BUILD, not a release: as .1 (never installed), plus a fresh-context
+    review's fixes (1f51e44): the callback's resolve decision in a pure,
+    tested helper (DayAlign::resolvePending), compile-time guards on the
+    operand types of the k = 0 byte identity, the day-align log serviced once
+    more after playing ends; mtcreceiver e720276 -> eb7ad4f (tests only).
+    audioplayer_tests 87/87 on .111.
+
+ -- Ion Reguera <ion@stagelab.coop>  Mon, 26 Oct 2026 01:57:56 +0100
+
 cuems-audioplayer (0.0.3-14~pre1amfwm7fbqy.1) bookworm; urgency=medium
 
   * TEST BUILD, not a release (ClickUp 1amfwm7fbqy, plan
