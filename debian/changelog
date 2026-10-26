@@ -1,3 +1,33 @@
+cuems-audioplayer (0.0.3-14~pre1amfwm7fbqy.1) bookworm; urgency=medium
+
+  * TEST BUILD, not a release (ClickUp 1amfwm7fbqy, plan
+    cuems-RELATIONS Plans/2026-10-25-mtc-day-align-24h-wrap.md step 2; the
+    release will be 0.0.3-14 once the rig steps pass).
+  * Silence after 24 h of MTC (lleida-diposit, 2026-10-24). The engine sends
+    /offset = -start in its own MTC domain, extended by every 24 h wrap it
+    has seen since the project was loaded; the player counted only the wraps
+    it had seen itself. A player spawned after the engine passed 24 h (every
+    re-arm of a looping show) put the start a day ahead and held digital
+    silence while logging "MTC -> Play started". Players alive across the
+    crossing kept playing; a soft restart cured it until the next 24 h.
+  * Each /offset is now converted into the player's own MTC day (nearest
+    day, 12 h rule) in the audio callback before it is used. With no day
+    difference the bytes are exactly the previous ones. Until the MTC head
+    is authoritative the value waits and the cue holds silence, as before
+    its start.
+  * New journal lines: "MTC day-align: on (12 h rule, ext)" at start; "MTC
+    day realign k=..." once when the conversion acts (INFO; WARNING if the
+    player is ahead of the engine); a WARNING for an implausible position
+    right after an engine offset and for an offset still unresolved after
+    2 s with MTC running.
+  * mtcreceiver 20ab95b -> e720276 (dayShift/toLocalDay, head-authoritative
+    flag). New tests test/test_dayalign.cpp; tests are off in this package
+    build (audioplayer_tests 83/83 on .111).
+  * Unchanged: the engine message (float32 /offset) and its ~8 ms quantum at
+    24 h of engine MTC, shared by all players of a cue.
+
+ -- Ion Reguera <ion@stagelab.coop>  Mon, 26 Oct 2026 01:44:29 +0100
+
 cuems-audioplayer (0.0.3-13) bookworm; urgency=high
 
   * Hotfix: AudioCues on compressed audio aborted at arm. cuems-mediadecoder's
