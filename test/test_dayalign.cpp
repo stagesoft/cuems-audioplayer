@@ -57,6 +57,22 @@ TEST(DayAlign, KZeroIsByteIdenticalToLegacy) {
     }
 }
 
+// The same bytes as literals, computed once with the pre-fix statement in a
+// separate program (2026-10-26), so the identity does not rest only on a copy.
+TEST(DayAlign, KZeroGoldenValues) {
+    struct { double off; long int lat; unsigned int ams; long long raw; long long bytes; } g[] = {
+        {-321040, 21, 384, -321040, -123271296LL},
+        {-86721040, 10, 384, -86721040, -33300877312LL},          // granadella P2's logged offset
+        {-(DAY + 1468000.0), 10, 384, -87868000, -33741307904LL},
+        {-(30.0 * DAY + 5 * 3600000.0 + 3000), 42, 768, -2610002944LL, -2004482260992LL},
+    };
+    for (const auto& x : g) {
+        const DayAlign::EngineOffset o = DayAlign::fromOsc(oscOffset(x.off), x.lat, x.ams);
+        EXPECT_EQ(o.rawMs, x.raw) << x.off;
+        EXPECT_EQ(DayAlign::localOffsetBytes(o, 0, x.ams), x.bytes) << x.off;
+    }
+}
+
 // lleida-diposit P2 (granadella 10-25): the player was spawned at wire 00:24:26
 // after the engine passed 24 h; the engine sent its day-1 start.
 TEST(DayAlign, DipositFreshPlayerAfterTheCrossing) {
@@ -171,6 +187,73 @@ TEST(DayAlign, MailboxNeverTorn) {
     EXPECT_EQ(backwards, 0UL) << "values only move forward";
     EXPECT_GT(reads, 0UL);
     EXPECT_EQ(last, 200000) << "the reader ends on the latest value";
+}
+
+// The callback's decision, with a fake toLocalDay: what the audio thread does
+// with the mailbox before the head is authoritative and after.
+namespace {
+struct FakeHead {
+    bool authoritative = false;
+    long head = 0;
+    int calls = 0;
+    bool operator()(long engineMs, long& localMs, long& k) {
+        ++calls;
+        if (!authoritative) return false;
+        k = MtcReceiver::dayShift(engineMs, head);
+        localMs = engineMs - k * MtcReceiver::DAY_MS;
+        return true;
+    }
+};
+} // namespace
+
+TEST(DayAlign, ResolveNothingNew) {
+    DayAlign::OffsetMailbox box;
+    FakeHead fake;
+    unsigned long applied = 0;
+    EXPECT_EQ(DayAlign::resolvePending(box, applied, 384, fake).status, DayAlign::Resolve::None);
+    EXPECT_EQ(fake.calls, 0) << "no conversion attempted without a new value";
+}
+
+TEST(DayAlign, ResolvePendingUntilAuthoritativeThenApplied) {
+    const unsigned int ams = 384;
+    DayAlign::OffsetMailbox box;
+    FakeHead fake;
+    unsigned long applied = 0;
+    box.publish(DayAlign::fromOsc(oscOffset(-(DAY + 1468000.0)), 10, ams));
+
+    for (int i = 0; i < 3; ++i) {                      // three callbacks before the first complete frame
+        const DayAlign::Resolution r = DayAlign::resolvePending(box, applied, ams, fake);
+        EXPECT_EQ(r.status, DayAlign::Resolve::Pending);
+        EXPECT_EQ(r.engineMs, DAY + 1468000);
+        EXPECT_EQ(applied, 0UL) << "a pending value must stay retryable";
+    }
+
+    fake.authoritative = true;
+    fake.head = 1466000;
+    const DayAlign::Resolution r = DayAlign::resolvePending(box, applied, ams, fake);
+    ASSERT_EQ(r.status, DayAlign::Resolve::Applied);
+    EXPECT_EQ(r.k, 1);
+    EXPECT_EQ(r.bytes, (-1468000LL + 10) * ams);
+    EXPECT_NE(applied, 0UL);
+    EXPECT_EQ(DayAlign::resolvePending(box, applied, ams, fake).status, DayAlign::Resolve::None)
+        << "applied once";
+}
+
+TEST(DayAlign, ResolveNewerPublishWhilePendingWins) {
+    const unsigned int ams = 384;
+    DayAlign::OffsetMailbox box;
+    FakeHead fake;
+    unsigned long applied = 0;
+    box.publish(DayAlign::fromOsc(oscOffset(-5000), 0, ams));
+    EXPECT_EQ(DayAlign::resolvePending(box, applied, ams, fake).status, DayAlign::Resolve::Pending);
+    box.publish(DayAlign::fromOsc(oscOffset(-9000), 0, ams));   // the engine re-sent (reveal)
+    fake.authoritative = true;
+    fake.head = 8000;
+    const DayAlign::Resolution r = DayAlign::resolvePending(box, applied, ams, fake);
+    ASSERT_EQ(r.status, DayAlign::Resolve::Applied);
+    EXPECT_EQ(r.engineMs, 9000);
+    EXPECT_EQ(r.k, 0);
+    EXPECT_EQ(r.bytes, DayAlign::fromOsc(oscOffset(-9000), 0, ams).legacyBytes) << "k = 0 is the legacy value";
 }
 
 TEST(DayAlign, ImplausibleThresholds) {

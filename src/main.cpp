@@ -368,6 +368,7 @@ int main( int argc, char *argv[] ) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         myAudioPlayer->serviceDayAlignLog();   // the audio callback never logs these itself
     }
+    myAudioPlayer->serviceDayAlignLog();       // a flag set by the callback that ended the play
 
     logger->logInfo( "End of playing reached, finishing" );
     logger->logInfo( "Exiting with result code: " + std::to_string( EXIT_SUCCESS ) );

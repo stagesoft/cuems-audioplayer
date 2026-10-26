@@ -39,6 +39,14 @@
 #include "audioplayer.h"
 
 #include <algorithm>   // std::find (serviceDayAlignLog)
+#include <type_traits>
+
+// DayAlign::fromOsc() reproduces the pre-day-align /offset bytes only with
+// these exact operand types (float + long int, * unsigned int).
+static_assert(std::is_same<decltype(AudioPlayer::audioMillisecondSize), unsigned int>::value,
+              "DayAlign::fromOsc() byte identity assumes unsigned int audioMillisecondSize");
+static_assert(std::is_same<decltype(AudioPlayer::outputLatencyMs_), std::atomic<long int>>::value,
+              "DayAlign::fromOsc() byte identity assumes a long int output latency");
 
 ////////////////////////////////////////////
 // Initializing static class members
@@ -519,32 +527,28 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
             // pending and the cue holds silence, as before its start
             // (serviceDayAlignLog() reports one stuck for > 2 s). Atomics only.
             bool offsetApplied = false;
-            DayAlign::EngineOffset newOffset;
-            unsigned long newOffsetSeq = 0;
-            if ( ap->offsetMailbox_.readNew( ap->offsetSeqApplied_, newOffset, newOffsetSeq ) ) {
-                long int localStartMs = 0, k = 0;
-                if ( MtcReceiver::toLocalDay( DayAlign::engineStartMs( newOffset ), localStartMs, k ) ) {
-                    ap->headOffset.store( DayAlign::localOffsetBytes( newOffset, k, ap->audioMillisecondSize ) );
-                    ap->offsetSeqApplied_ = newOffsetSeq;
-                    ap->offsetUnresolvedSinceMs_.store( 0 );
-                    if ( k != 0 ) {
-                        ap->dayK_.store( k );
-                        ap->dayEngineMs_.store( DayAlign::engineStartMs( newOffset ) );
-                        ap->dayHeadMs_.store( ap->mtcReceiver.mtcHead.load() );
-                        ap->dayShifts_.fetch_add( 1 );
-                        ap->dayEvents_.fetch_add( 1 );
-                    }
-                    offsetApplied = true;
-                    // Note: Don't set outOfFile here - let the boundary check below determine that
+            const DayAlign::Resolution res = DayAlign::resolvePending(
+                ap->offsetMailbox_, ap->offsetSeqApplied_, ap->audioMillisecondSize, MtcReceiver::toLocalDay );
+            if ( res.status == DayAlign::Resolve::Applied ) {
+                ap->headOffset.store( res.bytes );
+                ap->offsetUnresolvedSinceMs_.store( 0 );
+                if ( res.k != 0 ) {
+                    ap->dayK_.store( res.k );
+                    ap->dayEngineMs_.store( res.engineMs );
+                    ap->dayHeadMs_.store( ap->mtcReceiver.mtcHead.load() );
+                    ap->dayShifts_.fetch_add( 1 );
+                    ap->dayEvents_.fetch_add( 1 );
                 }
-                else {
-                    if ( ap->offsetUnresolvedSinceMs_.load() == 0 ) {
-                        ap->offsetUnresolvedSinceMs_.store( chrono::duration_cast<chrono::milliseconds>(
-                            chrono::steady_clock::now().time_since_epoch() ).count() );
-                    }
-                    memset( outputBuffer, 0, nBufferFrames * ap->audioFrameSize );
-                    return 0;
+                offsetApplied = true;
+                // Note: Don't set outOfFile here - let the boundary check below determine that
+            }
+            else if ( res.status == DayAlign::Resolve::Pending ) {
+                if ( ap->offsetUnresolvedSinceMs_.load() == 0 ) {
+                    ap->offsetUnresolvedSinceMs_.store( chrono::duration_cast<chrono::milliseconds>(
+                        chrono::steady_clock::now().time_since_epoch() ).count() );
                 }
+                memset( outputBuffer, 0, nBufferFrames * ap->audioFrameSize );
+                return 0;
             }
 
             // If our audio play head is too late or out of the boundaries of our mtc frame

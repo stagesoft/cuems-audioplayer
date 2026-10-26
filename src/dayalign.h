@@ -110,6 +110,40 @@ private:
     std::atomic<long long> latencyMs_{0};
 };
 
+// What the audio callback does with the mailbox on each MTC-following callback.
+enum class Resolve { None, Pending, Applied };
+struct Resolution {
+    Resolve status = Resolve::None;
+    long long bytes = 0;        // the new headOffset (Applied)
+    long k = 0;                 // day shift used (Applied)
+    long long engineMs = 0;     // the engine start it refers to (Pending, Applied)
+};
+
+// None: nothing newer than appliedSeq. Pending: a new value the head cannot
+// place yet (toLocalDay false); appliedSeq is left alone so it is retried, and
+// a newer publish replaces it. Applied: converted; appliedSeq advances.
+// toLocalDay is bool(long engineMs, long& localMs, long& k) and must be
+// lock-free: MtcReceiver::toLocalDay in the player, a fake in the tests.
+template <typename ToLocalDay>
+Resolution resolvePending(const OffsetMailbox& box, unsigned long& appliedSeq,
+                          unsigned int audioMillisecondSize, ToLocalDay&& toLocalDay) {
+    Resolution r;
+    EngineOffset o;
+    unsigned long seq = 0;
+    if (!box.readNew(appliedSeq, o, seq)) return r;
+    r.engineMs = engineStartMs(o);
+    long int localMs = 0, k = 0;
+    if (!toLocalDay(r.engineMs, localMs, k)) {
+        r.status = Resolve::Pending;
+        return r;
+    }
+    r.status = Resolve::Applied;
+    r.k = k;
+    r.bytes = localOffsetBytes(o, k, audioMillisecondSize);
+    appliedSeq = seq;
+    return r;
+}
+
 } // namespace DayAlign
 
 #endif // DAYALIGN_H
