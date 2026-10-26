@@ -18,6 +18,7 @@
 #include <set>
 #include "audioplayer.h"
 #include "feed_test_util.h"
+#include "mtcreceiver.h"
 #include "playercore.h"
 
 using A = AudioFstream;
@@ -50,6 +51,15 @@ struct FakeMtc {
     long head() const { return (long)(mtcNs / 1000000); }
 };
 
+// Day alignment against the fake head: always authoritative, the real 12 h rule
+bool fakeToLocalDay(void* ctx, long engineMs, long& localMs, long& k)
+{
+    const FakeMtc* m = static_cast<const FakeMtc*>(ctx);
+    k = MtcReceiver::dayShift(engineMs, m->head());
+    localMs = engineMs - k * MtcReceiver::DAY_MS;
+    return true;
+}
+
 struct Rig {
     std::string path;
     std::unique_ptr<A> f;
@@ -71,6 +81,10 @@ struct Rig {
         f->prepareFeed(RATE, N, false);
         c.reset(new PlayerCore(*f, RATE, N));
         c->setEndWaitMs(__LONG_MAX__);
+        DayResolver dr;
+        dr.fn = &fakeToLocalDay;
+        dr.ctx = &m;
+        c->setDayResolver(dr);
         loop(passes);
         period(3);          // anchored: LIVE
     }
@@ -176,9 +190,9 @@ std::vector<Entry> table()
     add("E3", P::PASTEND, [] { Rig r; ASSERT_TRUE(r.toPastEnd()); r.latch(OscEvent::MTCFOLLOW, 0); r.period();
         EXPECT_FALSE(r.c->following()); EXPECT_EQ(r.f->ps(), A::Ps::PASTEND); });
 
-    // E4 /offset, /offset_i
+    // E4 /offset, /start_tod (day alignment §7.2: /start_tod replaced /offset_i)
     add("E4", P::HOLD, [] { Rig r; r.latch(OscEvent::MTCFOLLOW, 1); r.offsetTo(-2000); r.period(2); EXPECT_EQ(r.f->ps(), A::Ps::HOLD);
-        r.latch(OscEvent::OFFSET_I, (int32_t)std::floor(200 - (double)r.m.mtcNs / 1e6)); r.period(2);
+        r.latch(OscEvent::START_TOD, (int32_t)(-(int64_t)std::floor(200 - (double)r.m.mtcNs / 1e6))); r.period(2);
         EXPECT_EQ(r.f->ps(), A::Ps::PLAY); ASSERT_GE(r.count(LogEvent::CACHE_START), 1); });
     add("E4", P::PLAY, [] { Rig r; ASSERT_TRUE(r.toPlay()); r.ms(200); r.clearLog(); r.offsetTo(300); r.period(4);   // into the head: RESET, cache start
         EXPECT_EQ(r.f->ps(), A::Ps::PLAY); EXPECT_EQ(r.count(LogEvent::CACHE_START), 1);

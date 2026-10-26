@@ -36,6 +36,7 @@ add_executable(audioplayer_tests
     test_soxr_feeding.cpp
     test_lockloop.cpp
     test_h3_table.cpp
+    test_dayalign.cpp
     test_mediadecoder_layout.cpp
     test_main.cpp
     # Source files needed for testing

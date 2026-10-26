@@ -657,7 +657,7 @@ TEST_F(FeedEngine, ProcessRunsWithDenormalsFlushed) {
 }
 
 // T7-12: a file shorter than the re-enable margin (341 + 80 ms) in once mode,
-// re-enabled at every pass by the engine's legacy per-pass /offset_i (the
+// re-enabled at every pass by the engine's legacy per-pass start, /start_tod (formerly /offset_i) (the
 // tiny-loop guard turned wrapping off). The fixed margin made e - margin
 // negative, so every re-enable after the first was refused and the cue went
 // silent. The margin no longer reaches into the file's first 341 + 80 ms, so

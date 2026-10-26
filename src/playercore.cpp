@@ -8,6 +8,7 @@
 #include "playercore.h"
 #include <cmath>
 #include <cstdio>
+#include "mtcreceiver.h"
 
 using lockloop::Mtc;
 using A = AudioFstream;
@@ -18,6 +19,16 @@ const double FIFO_STEADY = 241.0, FIFO_BAND = 256.0;   // section 4.3a, FIFO hea
 const int SETTLE_PERIODS = 3;
 const double RESYNC_MS = 80.0;                          // D3
 const int RESYNC_PERIODS = 3;
+const int64_t UNRESOLVED_WARN_NS = 2000000000LL;          // day alignment, logging 3
+
+bool mtcToLocalDay(void*, long engineMs, long& localMs, long& k)
+{
+    long int l = 0, kk = 0;
+    if (!MtcReceiver::toLocalDay(engineMs, l, kk)) return false;
+    localMs = l;
+    k = kk;
+    return true;
+}
 }  // namespace
 
 const char* PlayerCore::modeName(A::LoopMode m)
@@ -37,6 +48,7 @@ PlayerCore::PlayerCore(AudioFstream& engine, unsigned outRate, unsigned periodFr
     rNom_ = engine_.getSampleRate() > 0 && outRate_ > 0 ? (double)engine_.getSampleRate() / outRate_ : 1.0;
     T_ = outRate_ > 0 ? (double)period_ / outRate_ : 0.0;
     modeWord_.store((uint64_t)A::LoopMode::PENDING);
+    day_.fn = &mtcToLocalDay;
 }
 
 std::string PlayerCore::loopAckLine(const std::string& slug, int passes, int num, int den) const
@@ -89,20 +101,15 @@ void PlayerCore::applyOsc(const OscEvent& e, const A::LiveCtx& ctx)
         }
         break;
     case OscEvent::OFFSET_F:
-    case OscEvent::OFFSET_I: {                            // E4
-        offsetNs_ = (e.type == OscEvent::OFFSET_F) ? (int64_t)std::floor(e.f) * 1000000
-                                                   : (int64_t)e.a * 1000000;
-        engine_.clearSeekFailed();
-        lastKind_ = A::StartKind::OFFSET;
-        if (!live_.live()) break;                         // HOLD by E7/E8: the condition starts it later
-        target_ = computeTarget(lastNowNs_);
-        if (ps == A::Ps::PLAY || ps == A::Ps::SEEKING) {
-            engine_.offsetChanged(target_);
-        } else if (ps == A::Ps::PASTEND) {
-            if (engine_.reenable(target_)) lastKind_ = A::StartKind::REENABLE;
-        }
+    case OscEvent::START_TOD:                             // E4, once the start is in this day
+        // the raw value is kept (latest wins) and converted at first use, once
+        // the head is authoritative (day alignment §3.3 row 2, §7.2)
+        pendWire_ = (e.type == OscEvent::OFFSET_F) ? dayalign::Wire::OFFSET_F : dayalign::Wire::START_TOD;
+        pendRaw_ = (e.type == OscEvent::OFFSET_F) ? (int64_t)std::floor(e.f) : (int64_t)e.a;
+        pendSinceNs_ = lastNowNs_;
+        unresolvedWarned_ = false;
+        resolvePendingOffset();
         break;
-    }
     case OscEvent::LOOP: {                                // E5
         const int passes = e.nargs >= 1 ? e.a : 1;
         const int num = e.nargs >= 3 ? e.b : 0;
@@ -121,6 +128,41 @@ void PlayerCore::applyOsc(const OscEvent& e, const A::LiveCtx& ctx)
         if (!stopOnLostWarned_) { stopOnLostWarned_ = true; push(LogEvent::STOPONLOST_IGNORED, e.a); }
         break;
     }
+}
+
+// The pending start converted into this process's day, then E4's cell. False
+// while the head is not authoritative: the value stays pending, the start
+// condition waits (a running pass keeps its previous offset until then).
+bool PlayerCore::resolvePendingOffset()
+{
+    if (pendWire_ == dayalign::Wire::NONE) return false;
+    const int64_t engineMs = dayalign::engineStartMs(pendWire_, pendRaw_);
+    long localMs = 0, k = 0;
+    if (!day_.fn || !day_.fn(day_.ctx, (long)engineMs, localMs, k)) return false;
+    const dayalign::Wire w = pendWire_;
+    pendWire_ = dayalign::Wire::NONE;
+    offsetNs_ = dayalign::offsetNsFor(localMs);          // int64; k = 0 on /offset = floor(f) * 1e6
+    dayConversions_++;
+    // logging 1: one line per k value per process; k = 0 is the aligned case, no line
+    bool seen = (k == 0);
+    for (int i = 0; i < nSeenK_ && !seen; i++) seen = (seenK_[i] == k);
+    if (!seen) {
+        if (nSeenK_ < 8) seenK_[nSeenK_++] = k;
+        push(LogEvent::DAY_REALIGN, k, engineMs, lastHeadMs_, (double)dayConversions_, 0, 0,
+             w == dayalign::Wire::START_TOD ? 1 : 0);
+    }
+    // E4
+    engine_.clearSeekFailed();
+    lastKind_ = A::StartKind::OFFSET;
+    if (!live_.live()) return true;                       // HOLD by E7/E8: the condition starts it later
+    target_ = computeTarget(lastNowNs_);
+    const A::Ps ps = engine_.ps();
+    if (ps == A::Ps::PLAY || ps == A::Ps::SEEKING) {
+        engine_.offsetChanged(target_);
+    } else if (ps == A::Ps::PASTEND) {
+        if (engine_.reenable(target_)) lastKind_ = A::StartKind::REENABLE;
+    }
+    return true;
 }
 
 void PlayerCore::drainEngineEvents()
@@ -161,6 +203,7 @@ void PlayerCore::drainEngineEvents()
 void PlayerCore::callback(float* out, unsigned frames, int64_t nowNs, long headMs, const TickSample& tick)
 {
     lastNowNs_ = nowNs;
+    lastHeadMs_ = headMs;
     periods_++;
     // 1. MTC events (E6-E9)
     const lockloop::MtcLiveness::Edges ed = live_.update(nowNs, headMs, tick);
@@ -180,6 +223,16 @@ void PlayerCore::callback(float* out, unsigned frames, int64_t nowNs, long headM
     }
     if (live_.state() == Mtc::SUSPENDED) suspendedPeriods_++;
     if (live_.live()) target_ = computeTarget(nowNs);
+    // a start still waiting for an authoritative head (day alignment)
+    if (pendWire_ != dayalign::Wire::NONE) {
+        resolvePendingOffset();
+        if (pendWire_ != dayalign::Wire::NONE && !unresolvedWarned_ && live_.live() &&
+            nowNs - pendSinceNs_ > UNRESOLVED_WARN_NS) {   // logging 3
+            unresolvedWarned_ = true;
+            push(LogEvent::DAY_UNRESOLVED, pendRaw_, (nowNs - pendSinceNs_) / 1000000, 0, 0, 0, 0,
+                 pendWire_ == dayalign::Wire::START_TOD ? 1 : 0);
+        }
+    }
     A::LiveCtx ctx;
     ctx.target = target_;
     ctx.mtcLive = live_.live();
@@ -195,8 +248,14 @@ void PlayerCore::callback(float* out, unsigned frames, int64_t nowNs, long headM
     }
 
     // 4. the start condition (h.3)
+    if (engine_.ps() == A::Ps::HOLD && followingMtc_ && live_.live() && !implausibleWarned_ &&
+        pendWire_ == dayalign::Wire::NONE &&
+        target_ < -(int64_t)engine_.getSampleRate() * (dayalign::HOUR_MS / 1000)) {   // logging 2
+        implausibleWarned_ = true;
+        push(LogEvent::DAY_IMPLAUSIBLE, target_ * 1000 / engine_.getSampleRate());
+    }
     if (engine_.ps() == A::Ps::HOLD && followingMtc_ && live_.live() && target_ >= 0 &&
-        !engine_.seekFailedLatched()) {
+        pendWire_ == dayalign::Wire::NONE && !engine_.seekFailedLatched()) {
         engine_.start(target_, lastKind_);
     }
 
@@ -336,6 +395,22 @@ std::string PlayerCore::describe(const LogEvent& e, const std::string& slug, boo
         break;
     case LogEvent::INVARIANT: *level = 3; snprintf(b, sizeof b, "feed invariant violated (code %lld)", (long long)e.a); break;
     case LogEvent::PAST_END_START: snprintf(b, sizeof b, "start past the end (target %lld)", (long long)e.a); break;
+    case LogEvent::DAY_REALIGN:
+        *level = dayalign::realignIsWarning(e.kind ? dayalign::Wire::START_TOD : dayalign::Wire::OFFSET_F, e.a) ? 4 : 6;
+        snprintf(b, sizeof b, "MTC day realign k=%lld (engine %lld ms, local head %lld ms, phase=%s); %lld conversions",
+                 (long long)e.a, (long long)e.b, (long long)e.c, e.kind ? "tod" : "ext", (long long)e.x);
+        break;
+    case LogEvent::DAY_UNRESOLVED:
+        *level = 4;
+        snprintf(b, sizeof b, "cue start %s %lld ms still unresolved after %lld ms with MTC running "
+                 "(MTC head not authoritative): the cue stays silent", e.kind ? "/start_tod" : "/offset",
+                 (long long)e.a, (long long)e.b);
+        break;
+    case LogEvent::DAY_IMPLAUSIBLE:
+        *level = 4;
+        snprintf(b, sizeof b, "cue start resolved %lld ms in the future (more than 1 h): a wrong MTC day?",
+                 (long long)-e.a);
+        break;
     }
     return b;
 }
