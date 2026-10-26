@@ -31,6 +31,18 @@ Dependencies: `librtmidi-dev` (3.0.0), `librtaudio-dev` (**≥ 5.1** — needed 
 
 Reads MTC via its `mtcreceiver` submodule from ALSA `Midi Through Port-0`. After the mtcreceiver `rc_1` `aa44894` resync-hold fix, `mtcHead` is a continuous QF timebase, so audioplayer (raw `mtcHead` read, 2-frame tolerance) needs only the submodule bump — no code change. See the mtcreceiver CLAUDE.md for the 2s-skip root cause.
 
+**Engine `/offset` is converted into this process's MTC day (24 h wrap).** A per-cue player spawned after the engine
+passed 24 h used to put the start a day ahead and hold digital silence while logging `MTC -> Play started`
+(lleida-diposit 2026-10-24). Now the OSC thread publishes each `/offset` raw through a single-writer seqlock
+(`DayAlign::OffsetMailbox`, `src/dayalign.h`), and the audio callback resolves it with `MtcReceiver::toLocalDay(-offset)`
+(`DayAlign::resolvePending`). **k = 0 keeps the legacy float byte expression, byte for byte** (`fromOsc`, guarded by
+`static_assert`s on the operand types and golden values in `test/test_dayalign.cpp`); k ≠ 0 is exact int64. While the head
+is not authoritative the value stays pending and the cue holds silence. The callback never logs: it sets atomics,
+`main()`'s wait loop calls `serviceDayAlignLog()` — journal lines `MTC day-align: on (12 h rule, ext)` (start),
+`MTC day realign k=…` (once per k; INFO k ≥ 1, WARNING k < 0), implausible position, offset unresolved > 2 s. The engine
+message (float32 `/offset`) is unchanged; its ~8 ms quantum at 24 h stays on this line. Since `695aa28`/`1f51e44`
+(`fix/1amfwm7fbqy-mtc-day-align`), test deb `0.0.3-14~pre1amfwm7fbqy.2`.
+
 ## Cue boundary / silence contract
 
 The MTC-correction path in `audioCallback` (`src/audioplayer.cpp`) computes
