@@ -1,3 +1,18 @@
+cuems-audioplayer (0.0.3-15~pre869ejxng3.8) bookworm; urgency=medium
+
+  * TEST BUILD, not a release: as .7, plus the day alignment of the cue start
+    (cuems-RELATIONS Plans/2026-10-25-mtc-day-align-24h-wrap.md step 5+10,
+    feature 1d7b153 + ba58d13): /offset and the new /start_tod (MTC position
+    modulo 24 h) are converted into this process's MTC day at first use
+    (mtcreceiver eb7ad4f, 12 h rule); CAPS line "loop varispeed dayalign";
+    /offset_i removed (ERROR if received).
+  * Re-versioned 0.0.3-15~pre* (D3): above the released 0.0.3-14, so a rig with
+    this build is never replaced by the released line silently.
+  * Breaks: cuems-engine (= 0.1.0rc6-7~pre869ejxng3.1), the only engine build
+    that sends /offset_i; install the engine and the player together.
+
+ -- Ion Reguera <ion@stagelab.coop>  Mon, 26 Oct 2026 11:43:07 +0100
+
 cuems-audioplayer (0.0.3-14~pre869ejxng3.7) bookworm; urgency=medium
 
   * TEST BUILD, not a release: as .6, plus T7-14 (feature 68b7ab4, test

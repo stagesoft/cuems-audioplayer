@@ -12,6 +12,7 @@ Package: cuems-audioplayer
 Architecture: any
 Multi-Arch: foreign
 Depends: ${misc:Depends}, ${shlibs:Depends}, jackd2
+Breaks: cuems-engine (= 0.1.0rc6-7~pre869ejxng3.1)
 Description: MTC synchronized audio player
  This is an audio player that can play in sync with MTC timecode
  and is part of the cuems project. It supports various audio formats
