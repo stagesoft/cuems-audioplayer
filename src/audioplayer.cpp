@@ -558,11 +558,17 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
         } else if ( is("/offset") ) {
             float offsetOSC;
             m.ArgumentStream() >> offsetOSC >> osc::EndMessage;
+            int64_t ms = 0;
+            if (!dayalign::floorMs(offsetOSC, &ms)) {
+                CuemsLogger::getLogger()->logError("OSC: /offset value " + std::to_string(offsetOSC)
+                                                   + " is not a finite time: ignored");
+                return;
+            }
             OscEvent e;
             e.type = OscEvent::OFFSET_F;
             e.f = offsetOSC;
             core->latch(e);
-            CuemsLogger::getLogger()->logInfo("OSC: new offset value " + std::to_string((long int)floor(offsetOSC)));
+            CuemsLogger::getLogger()->logInfo("OSC: new offset value " + std::to_string((long long)ms));
         // Cue start as MTC position modulo 24 h (day alignment §7.2; it replaces
         // /offset_i): normalised into [0, DAY) with a WARNING, never rejected
         } else if ( is("/start_tod") ) {
@@ -575,9 +581,14 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
             int64_t v = 0;
             if (it->IsInt32()) v = dayalign::normalizeTod(it->AsInt32(), &changed);
             else if (it->IsInt64()) v = dayalign::normalizeTod(it->AsInt64(), &changed);
-            else if (it->IsFloat()) v = dayalign::todFromFloat(it->AsFloat(), &changed);
-            else if (it->IsDouble()) v = dayalign::todFromFloat(it->AsDouble(), &changed);
-            else {
+            else if (it->IsFloat() || it->IsDouble()) {
+                const double f = it->IsFloat() ? (double)it->AsFloat() : it->AsDouble();
+                if (!dayalign::todFromFloat(f, &v, &changed)) {
+                    CuemsLogger::getLogger()->logError("OSC: /start_tod value " + std::to_string(f)
+                                                       + " is not a finite time: ignored");
+                    return;
+                }
+            } else {
                 CuemsLogger::getLogger()->logError("OSC: /start_tod with a non-numeric value: ignored");
                 return;
             }
@@ -590,9 +601,14 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
             core->latch(e);
             CuemsLogger::getLogger()->logInfo("OSC: new start_tod value " + std::to_string(v));
         // /offset_i is gone (day alignment §7.2, packages installed together):
-        // loud, and the value is ignored
+        // loud, and the value is ignored; at most one ERROR per 60 s, with a count
         } else if ( is("/offset_i") ) {
-            CuemsLogger::getLogger()->logError("/offset_i received: engine and player versions do not match");
+            const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            uint64_t n = 0;
+            if (offsetIErrors_.hit(nowNs, &n))
+                CuemsLogger::getLogger()->logError("/offset_i received: engine and player versions do not match"
+                    + (n > 1 ? " (" + std::to_string(n) + " since the last line)" : std::string()));
         // Loop: i:passes [i:period_num i:period_den], parsed leniently (section 4.2)
         } else if ( is("/loop") ) {
 #ifdef CUEMS_TEST_KNOBS

@@ -112,6 +112,7 @@ private:
     int64_t computeTarget(int64_t nowNs) const;
     int64_t endEff() const;
     bool resolvePendingOffset();
+    void setKind(AudioFstream::StartKind k) { lastKind_ = k; kindSeq_++; }
 
     AudioFstream& engine_;
     unsigned outRate_, period_;
@@ -127,6 +128,7 @@ private:
     int64_t lastNowNs_ = 0;
     double lastEMs_ = 0;
     AudioFstream::StartKind lastKind_ = AudioFstream::StartKind::REVEAL;
+    uint32_t kindSeq_ = 0;                              // bumped by every setKind()
     int settle_ = 0;
     int e10_ = 0;
     bool fifoErrorOnce_ = false, safetyOnce_ = false, playStopWarned_ = false, stopOnLostWarned_ = false;
@@ -145,6 +147,7 @@ private:
     dayalign::Wire pendWire_ = dayalign::Wire::NONE;
     int64_t pendRaw_ = 0;
     int64_t pendSinceNs_ = 0;
+    uint32_t pendKindSeq_ = 0;                          // kindSeq_ when the pending value was latched
     long lastHeadMs_ = 0;
     bool unresolvedWarned_ = false, implausibleWarned_ = false;
     int64_t seenK_[8] = {0};

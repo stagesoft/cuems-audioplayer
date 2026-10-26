@@ -7,7 +7,10 @@
 // /start_tod and /offset resolved by PlayerCore into this process's MTC day
 // at first use, against a fake head (the 12 h rule itself is mtcreceiver's
 // dayShift, tested there). The pending path, the out-of-range normalisation,
-// the int64 widening (a head at 30 days) and the three journal lines.
+// the int64 widening (a head at 30 days), the three journal lines, and the
+// review fixes of 2026-10-26 (the deferred start keeps a REVEAL kind and runs
+// after the OSC events, non-finite floats, the production resolver, the
+// warnings per start value, the throttled /offset_i ERROR).
 
 #include <gtest/gtest.h>
 #include <cmath>
@@ -52,7 +55,9 @@ struct Rig {
     std::vector<float> out = std::vector<float>(N);
     std::vector<LogEvent> log;
 
-    explicit Rig(int64_t headMs)
+    bool fake;                                          // false: the production resolver
+
+    explicit Rig(int64_t headMs, bool fakeDay = true) : fake(fakeDay)
     {
         path = feedtest::tmpPath("dayalign");
         std::vector<float> x(3 * RATE);
@@ -63,16 +68,20 @@ struct Rig {
         f->prepareFeed(RATE, N, false);
         c.reset(new PlayerCore(*f, RATE, N));
         c->setEndWaitMs(__LONG_MAX__);
-        DayResolver dr;
-        dr.fn = &fakeToLocalDay;
-        dr.ctx = &day;
-        c->setDayResolver(dr);
+        if (fake) {
+            DayResolver dr;
+            dr.fn = &fakeToLocalDay;
+            dr.ctx = &day;
+            c->setDayResolver(dr);
+        }
         setHead(headMs);
         latchLoop(1);
         period(3);
     }
     ~Rig() { unlink(path.c_str()); }
-    void setHead(int64_t ms) { day.headMs = ms; mtcNs = ms * 1000000; }
+    void setHead(int64_t ms) { day.headMs = ms; mtcNs = ms * 1000000; publishHead(); }
+    // the production resolver reads the receiver's own head
+    void publishHead() { if (!fake) MtcReceiver::mtcHead.store((long)day.headMs); }
     void latchLoop(int passes)
     {
         OscEvent e;
@@ -89,6 +98,7 @@ struct Rig {
             now += P_NS;
             mtcNs += P_NS;
             day.headMs = mtcNs / 1000000;
+            publishHead();
             t.monoNs = now; t.headMs = (long)day.headMs; t.anchored = true; t.complete = true; t.seq++;
             c->callback(out.data(), N, now, (long)day.headMs, t);
             f->workerRunPending();
@@ -116,9 +126,10 @@ TEST(DayAlign, TodNormalisedIntoOneDay)
     EXPECT_EQ(dayalign::normalizeTod(3 * DAY + 5, &ch), 5); EXPECT_TRUE(ch);
     EXPECT_EQ(dayalign::normalizeTod(-DAY - 7, &ch), DAY - 7); EXPECT_TRUE(ch);
     // a lenient float sender: floored, then normalised (the engine rounds then mods)
-    EXPECT_EQ(dayalign::todFromFloat(86399999.6, &ch), 86399999); EXPECT_FALSE(ch);
-    EXPECT_EQ(dayalign::todFromFloat(86400000.0, &ch), 0); EXPECT_TRUE(ch);
-    EXPECT_EQ(dayalign::todFromFloat(-0.4, &ch), 86399999); EXPECT_TRUE(ch);
+    int64_t v = -1;
+    ASSERT_TRUE(dayalign::todFromFloat(86399999.6, &v, &ch)); EXPECT_EQ(v, 86399999); EXPECT_FALSE(ch);
+    ASSERT_TRUE(dayalign::todFromFloat(86400000.0, &v, &ch)); EXPECT_EQ(v, 0); EXPECT_TRUE(ch);
+    ASSERT_TRUE(dayalign::todFromFloat(-0.4, &v, &ch)); EXPECT_EQ(v, 86399999); EXPECT_TRUE(ch);
 }
 
 TEST(DayAlign, OffsetWithKZeroIsTheLegacyValue)
@@ -267,7 +278,9 @@ TEST(DayAlign, PendingUntilTheHeadIsAuthoritativeThenPlays)
     EXPECT_FALSE(r.c->offsetPending());
     EXPECT_EQ(r.localStartMs(), startMs);
     EXPECT_EQ(r.f->ps(), A::Ps::PLAY);
-    EXPECT_GE(r.count(LogEvent::CACHE_START), 1);
+    ASSERT_GE(r.count(LogEvent::CACHE_START), 1);
+    // the follow came before the value: the value's E4 labels the start OFFSET
+    EXPECT_EQ(r.first(LogEvent::CACHE_START)->kind, (int)A::StartKind::OFFSET);
 }
 
 TEST(DayAlign, LatestPendingValueWins)
@@ -323,4 +336,102 @@ TEST(DayAlign, NearStartIsNotImplausible)
     r.tod((int32_t)(10 * H + 30000));                    // 30 s from now
     r.period(10);
     EXPECT_EQ(r.count(LogEvent::DAY_IMPLAUSIBLE), 0);
+}
+
+// --- review fixes, 2026-10-26 ---------------------------------------------
+
+TEST(DayAlign, FollowWhilePendingKeepsTheRevealKindAndStartsOnTheResolvingCallback)
+{
+    Rig r(10 * H);
+    r.day.authoritative = false;
+    const int64_t startMs = r.day.headMs + 200;
+    r.tod((int32_t)(startMs % DAY));                     // latched first: pending
+    r.period();
+    r.follow();                                          // E2 after the latch: REVEAL
+    r.period(30);                                        // past the start, still unresolved
+    ASSERT_TRUE(r.c->offsetPending());
+    ASSERT_EQ(r.f->ps(), A::Ps::HOLD);
+    const size_t before = r.log.size();
+    r.day.authoritative = true;
+    r.period();                                          // resolved, then the start condition
+    EXPECT_FALSE(r.c->offsetPending());
+    EXPECT_NE(r.f->ps(), A::Ps::HOLD) << "the start must happen on the resolving callback";
+    EXPECT_EQ(r.localStartMs(), startMs);
+    const LogEvent* s = nullptr;
+    for (size_t i = before; i < r.log.size() && !s; i++)
+        if (r.log[i].type == LogEvent::CACHE_START || r.log[i].type == LogEvent::SEEK_PICKUP) s = &r.log[i];
+    ASSERT_NE(s, nullptr);
+    EXPECT_EQ(s->kind, (int)A::StartKind::REVEAL);     // not relabelled OFFSET by the late E4
+}
+
+TEST(DayAlign, NonFiniteOrHugeFloatsAreRejected)
+{
+    int64_t v = 7;
+    bool ch = false;
+    for (double f : {(double)NAN, (double)INFINITY, -(double)INFINITY, 1e16, -1e16, 9.3e18}) {
+        EXPECT_FALSE(dayalign::floorMs(f, &v)) << f;
+        EXPECT_EQ(v, 7) << f;                            // untouched
+        EXPECT_FALSE(dayalign::todFromFloat(f, &v, &ch)) << f;
+    }
+    ASSERT_TRUE(dayalign::floorMs(-1e15, &v));
+    EXPECT_EQ(v, -1000000000000000LL);
+}
+
+TEST(DayAlign, NonFiniteOffsetIsIgnoredByTheCore)
+{
+    Rig r(10 * H);
+    r.tod((int32_t)(10 * H + 5000));
+    r.period();
+    const int64_t before = r.c->offsetNs();
+    r.offsetF(NAN); r.period();
+    r.offsetF(INFINITY); r.period();
+    r.offsetF(-1e17); r.period();
+    EXPECT_EQ(r.c->offsetNs(), before);
+    EXPECT_FALSE(r.c->offsetPending());
+}
+
+TEST(DayAlign, ProductionResolverFollowsTheReceiversFlag)
+{
+    MtcReceiver::resetStaticStateForTesting();
+    MtcReceiver::setHeadAuthoritativeForTesting(false);
+    {
+        Rig r(DAY + 10 * H, false);                      // no override: MtcReceiver::toLocalDay
+        r.tod((int32_t)(10 * H + 5000));
+        r.period(3);
+        EXPECT_TRUE(r.c->offsetPending());               // not authoritative: pending
+        MtcReceiver::setHeadAuthoritativeForTesting(true);
+        r.period();
+        EXPECT_FALSE(r.c->offsetPending());
+        EXPECT_EQ(r.localStartMs(), DAY + 10 * H + 5000);
+        EXPECT_EQ(r.count(LogEvent::DAY_REALIGN), 1);    // k = -1: alive across midnight
+    }
+    MtcReceiver::setHeadAuthoritativeForTesting(false);
+    MtcReceiver::resetStaticStateForTesting();
+}
+
+TEST(DayAlign, ImplausibleWarningIsPerStartValue)
+{
+    Rig r(10 * H);
+    r.follow();
+    r.tod((int32_t)(12 * H));                            // 2 h ahead
+    r.period(5);
+    ASSERT_EQ(r.count(LogEvent::DAY_IMPLAUSIBLE), 1);
+    r.tod((int32_t)(12 * H + 1000));                     // a new value (the legacy loop re-sends each pass)
+    r.period(5);
+    EXPECT_EQ(r.count(LogEvent::DAY_IMPLAUSIBLE), 2);
+}
+
+TEST(DayAlign, OffsetIErrorIsThrottled)
+{
+    const int64_t S = 1000000000LL;
+    dayalign::ThrottledCount t{60 * S};
+    uint64_t n = 0;
+    ASSERT_TRUE(t.hit(0, &n));                           // the first one at once
+    EXPECT_EQ(n, 1u);
+    for (int i = 1; i < 59; i++) EXPECT_FALSE(t.hit(i * S, &n)) << i;
+    ASSERT_TRUE(t.hit(60 * S, &n));                      // one line per 60 s, with the count
+    EXPECT_EQ(n, 59u);
+    EXPECT_FALSE(t.hit(61 * S, &n));
+    ASSERT_TRUE(t.hit(200 * S, &n));
+    EXPECT_EQ(n, 2u);
 }
