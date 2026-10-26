@@ -373,9 +373,14 @@ int main( int argc, char *argv[] ) {
                         std::to_string(testknobs::knobs().failWrap ? 1 : 0) );
 #endif
 
-    // The capability line, before RUNNING, in one write(2) (section 4.2)
+    // Day alignment banner (cuems-RELATIONS Plans/2026-10-25-mtc-day-align-24h-wrap.md,
+    // logging 4): /start_tod and /offset starts are converted into this process's day
+    logger->logInfo( "MTC day-align: on (12 h rule, tod)" );
+
+    // The capability line, before RUNNING, in one write(2) (section 4.2); `dayalign`:
+    // the engine sends /start_tod (day alignment §7.2)
     {
-        const std::string caps = "[" + logger->getSlug() + "] [OK] CAPS: loop varispeed\n";
+        const std::string caps = "[" + logger->getSlug() + "] [OK] CAPS: loop varispeed dayalign\n";
         ssize_t r = ::write(STDOUT_FILENO, caps.data(), caps.size());
         (void)r;
     }

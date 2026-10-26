@@ -2068,7 +2068,7 @@ bool AudioFstream::reenable(int64_t target)
     // The margin keeps a target just before the end from re-arming a pass that
     // would end at once. It never reaches into the file's first `fixed` samples:
     // a file shorter than the fixed margin (the tiny-loop guard's legacy
-    // fallback, T7-12) is re-enabled by every per-pass /offset_i whose target
+    // fallback, T7-12) is re-enabled by every per-pass start (/start_tod, formerly /offset_i) whose target
     // (latency included, ~32 ms on the rigs) still lies inside the file.
     const int64_t e = endSamples();
     const int64_t fixed = 341 + (int64_t)fileSampleRate * 80 / 1000;
