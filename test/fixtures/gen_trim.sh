@@ -14,7 +14,8 @@ cd "$(dirname "$0")"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 F="ffmpeg -hide_banner -loglevel error -y"
 BX="-fflags +bitexact -flags:a +bitexact"
-$F -f lavfi -i "sine=f=440:d=1.5:sample_rate=48000,volume=-27dB" $BX -ac 1 -c:a aac -b:a 24k "$T/src.m4a"
+# A loud chirp (200 -> 650 Hz): no lag of a pass looks like another, so a misaligned wrap fails the content check
+$F -f lavfi -i "aevalsrc=0.5*sin(2*PI*(200*t+150*t*t)):s=48000:d=1.5" $BX -ac 1 -c:a aac -b:a 24k "$T/src.m4a"
 $F -ss 0.52 -i "$T/src.m4a" -c copy $BX -f mp4 "$T/fx_trim_aac.mp4"
 # the decoded length with the cut's skip applied (mono s16: 2 bytes per frame)
 frames=$(( $($F -i "$T/fx_trim_aac.mp4" -f s16le -ac 1 - | wc -c) / 2 ))

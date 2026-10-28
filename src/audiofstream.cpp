@@ -591,6 +591,16 @@ bool AudioFstream::firstPacketSeek(bool atOpen)
         const int64_t target = (attempt == 0) ? INT64_MIN : streamFirstTs;
         ret = avformat_seek_file(fc, audioStreamIndex, INT64_MIN, target, target, 0);
         if (ret < 0 && !atOpen) {
+            // A refused INT64_MIN seek still gets the retry at the first pts
+            if (attempt == 0 && streamFirstTsKnown) {
+                if (!firstSeekFallbackLogged) {
+                    firstSeekFallbackLogged = true;
+                    CuemsLogger::getLogger()->logInfo("First-packet seek refused (" + getFFmpegError(ret) +
+                        "): seeking to the stream's first pts " + std::to_string(streamFirstTs) +
+                        " for this file");
+                }
+                continue;
+            }
             CuemsLogger::getLogger()->logError("Wrap seek failed: " + getFFmpegError(ret));
             return false;
         }
@@ -630,7 +640,9 @@ bool AudioFstream::firstPacketSeek(bool atOpen)
         if (!firstSeekFallbackLogged) {
             firstSeekFallbackLogged = true;
             CuemsLogger::getLogger()->logInfo(std::string("First-packet seek ") +
-                (ret < 0 ? "found no audio packet" : "landed at ts " + std::to_string(ts)) +
+                (ret < 0 ? "found no audio packet"
+                 : ts == AV_NOPTS_VALUE ? "landed on a packet with no timestamp"
+                 : "landed at ts " + std::to_string(ts)) +
                 ": seeking to the stream's first pts " + std::to_string(streamFirstTs) +
                 " for this file");
         }
@@ -641,6 +653,14 @@ bool AudioFstream::firstPacketSeek(bool atOpen)
         return false;
     }
     if (atOpen) {
+        // Kept: the cue still plays, from the packet reached, and every wrap
+        // returns there; the pass is shorter or longer than the file by the
+        // packets in between
+        if (streamFirstTsKnown && ts != streamFirstTs) {
+            CuemsLogger::getLogger()->logError("First-packet seek landed at ts " + std::to_string(ts) +
+                ", the stream's first audio packet is at " + std::to_string(streamFirstTs) +
+                ": this file plays and loops from there");
+        }
         firstAudioTs = ts;
         firstAudioTsKnown = true;
         contentStartTs = AV_NOPTS_VALUE;

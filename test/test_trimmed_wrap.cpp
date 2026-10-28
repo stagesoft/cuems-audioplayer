@@ -98,12 +98,19 @@ TEST_F(TrimmedWrap, WrapSeekLandsOnTheFirstPacketEveryPass) {
         const auto again = readToEnd(s);
         ASSERT_EQ(again.size(), pass1.size()) << "pass " << pass;
         EXPECT_EQ(s.getFirstDeliveredSample(), 0) << "pass " << pass;
-        double maxd = 0;
+        double e1 = 0, ed = 0;
         for (size_t i = 0; i < pass1.size(); i++) {
-            maxd = std::max(maxd, std::fabs((double)again[i] - (double)pass1[i]));
+            const double d = (double)again[i] - (double)pass1[i];
+            e1 += (double)pass1[i] * pass1[i];
+            ed += d * d;
         }
-        // The native AAC encoder's PNS noise is not reset by a flush (the
-        // step-0 gate's aac tolerance)
-        EXPECT_LE(maxd, 0.1) << "pass " << pass;
+        const double rms1 = std::sqrt(e1 / pass1.size()), rel = std::sqrt(ed / e1);
+        std::printf("pass %d: rms %.4f, difference to pass 1 %.5f of it\n", pass, rms1, rel);
+        // The fixture is loud enough for the comparison to mean something
+        ASSERT_GT(rms1, 0.1);
+        // A pass that starts a packet early or late is off by ~1.4 (a chirp
+        // decorrelates at any lag); the native AAC encoder's noise that a flush
+        // does not reset is far below this
+        EXPECT_LE(rel, 0.05) << "pass " << pass;
     }
 }
