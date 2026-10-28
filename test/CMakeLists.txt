@@ -38,6 +38,7 @@ add_executable(audioplayer_tests
     test_h3_table.cpp
     test_dayalign.cpp
     test_mediadecoder_layout.cpp
+    test_trimmed_wrap.cpp
     test_main.cpp
     # Source files needed for testing
     ../src/commandlineparser.cpp

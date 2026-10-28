@@ -71,6 +71,9 @@ AudioFstream::AudioFstream( const string filename,
     decodedFrames = 0;
     firstAudioTs = AV_NOPTS_VALUE;
     firstAudioTsKnown = false;
+    streamFirstTs = AV_NOPTS_VALUE;
+    streamFirstTsKnown = false;
+    firstSeekFallbackLogged = false;
     audioStartTime = AV_NOPTS_VALUE;
     contentStartTs = AV_NOPTS_VALUE;
     calibratePending = false;
@@ -328,6 +331,22 @@ void AudioFstream::open(const string path, ios_base::openmode mode)
     discardSet = true;
     headerLen = totalSamples;
 
+    // The stream's true first audio packet, read before any seek (S10-1): the
+    // pts every first-packet seek must land on
+    streamFirstTsKnown = false;
+    firstSeekFallbackLogged = false;
+    while (fileReader.readPacket(packet) >= 0) {
+        const bool audio = packet->stream_index == audioStreamIndex;
+        if (audio) {
+            streamFirstTs = (packet->pts != AV_NOPTS_VALUE) ? packet->pts : packet->dts;
+            streamFirstTsKnown = (streamFirstTs != AV_NOPTS_VALUE);
+        }
+        av_packet_unref(packet);
+        if (audio) {
+            break;
+        }
+    }
+
     if (!firstPacketSeek(true)) {
         cleanupFFmpeg();
         errorState = true;
@@ -556,44 +575,71 @@ int64_t AudioFstream::tsToFileSample(int64_t ts) const
 // the wrap failed, M9), and an Opus decoder that has already decoded gets its
 // pre-skip discarded when the packet carries no skip side data (libavcodec
 // applies the pre-skip only once per decoder, M10). No soxr_clear.
+//
+// The seek is avformat_seek_file(INT64_MIN). On a stream-copy-trimmed mp4
+// (AAC whose first packets have negative pts, the first carrying the skip
+// samples of the cut) the mov demuxer lands on the SECOND packet at open and
+// at end of file on a wrap (S10-1): then the seek is retried at the stream's
+// true first pts, read at open before any seek (streamFirstTs), which lands on
+// it in every container the player wraps (step 10, S10-1 fix).
 bool AudioFstream::firstPacketSeek(bool atOpen)
 {
     AVFormatContext* fc = fileReader.getFormatContext();
-    int ret = avformat_seek_file(fc, audioStreamIndex, INT64_MIN, INT64_MIN, INT64_MIN, 0);
-    if (ret < 0 && !atOpen) {
-        CuemsLogger::getLogger()->logError("Wrap seek failed: " + getFFmpegError(ret));
-        return false;
-    }
-    // At open a refused seek is harmless: nothing has been read yet
-    audioDecoder.flush();
-    
-    conversionBufferUsed = 0;
-    conversionBufferPos = 0;
-    eofReached = false;
-    demuxEof = false;
-    decoderDrained = false;
-    resamplerDrained = false;
-    decodedFrames = 0;
-    pendingDiscard = 0;
-    firstDeliveredKnown = false;
-    firstDeliveredSample = INT64_MIN;
-    convKnown = false;
-    fromFirstPacket = true;
-    
-    while (true) {
-        ret = fileReader.readPacket(packet);
-        if (ret < 0) {
-            CuemsLogger::getLogger()->logError("No audio packet after the first-packet seek: " +
-                                               getFFmpegError(ret));
+    int ret = 0;
+    int64_t ts = AV_NOPTS_VALUE;
+    for (int attempt = 0; attempt < 2; attempt++) {
+        const int64_t target = (attempt == 0) ? INT64_MIN : streamFirstTs;
+        ret = avformat_seek_file(fc, audioStreamIndex, INT64_MIN, target, target, 0);
+        if (ret < 0 && !atOpen) {
+            CuemsLogger::getLogger()->logError("Wrap seek failed: " + getFFmpegError(ret));
             return false;
         }
-        if (packet->stream_index == audioStreamIndex) {
+        // At open a refused seek is harmless: nothing has been read yet
+        audioDecoder.flush();
+
+        conversionBufferUsed = 0;
+        conversionBufferPos = 0;
+        eofReached = false;
+        demuxEof = false;
+        decoderDrained = false;
+        resamplerDrained = false;
+        decodedFrames = 0;
+        pendingDiscard = 0;
+        firstDeliveredKnown = false;
+        firstDeliveredSample = INT64_MIN;
+        convKnown = false;
+        fromFirstPacket = true;
+
+        while (true) {
+            ret = fileReader.readPacket(packet);
+            if (ret < 0 || packet->stream_index == audioStreamIndex) {
+                break;
+            }
+            av_packet_unref(packet);
+        }
+        if (ret >= 0) {
+            ts = (packet->pts != AV_NOPTS_VALUE) ? packet->pts : packet->dts;
+        }
+        // Landed on the stream's first packet, or nothing to retry with
+        if (!streamFirstTsKnown || (ret >= 0 && ts == streamFirstTs) || attempt == 1) {
             break;
         }
-        av_packet_unref(packet);
+        if (ret >= 0) {
+            av_packet_unref(packet);
+        }
+        if (!firstSeekFallbackLogged) {
+            firstSeekFallbackLogged = true;
+            CuemsLogger::getLogger()->logInfo(std::string("First-packet seek ") +
+                (ret < 0 ? "found no audio packet" : "landed at ts " + std::to_string(ts)) +
+                ": seeking to the stream's first pts " + std::to_string(streamFirstTs) +
+                " for this file");
+        }
     }
-    
-    const int64_t ts = (packet->pts != AV_NOPTS_VALUE) ? packet->pts : packet->dts;
+    if (ret < 0) {
+        CuemsLogger::getLogger()->logError("No audio packet after the first-packet seek: " +
+                                           getFFmpegError(ret));
+        return false;
+    }
     if (atOpen) {
         firstAudioTs = ts;
         firstAudioTsKnown = true;

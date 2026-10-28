@@ -246,6 +246,9 @@ class AudioFstream
         // First-packet seek state
         int64_t firstAudioTs;        // pts (else dts) of the stream's first audio packet
         bool firstAudioTsKnown;
+        int64_t streamFirstTs;       // the same, read at open before any seek (S10-1)
+        bool streamFirstTsKnown;
+        bool firstSeekFallbackLogged;
         int64_t audioStartTime;      // stream start_time: the fallback position reference
         int64_t contentStartTs;      // ts of content sample 0, taken at the first delivery after open
         bool calibratePending;
