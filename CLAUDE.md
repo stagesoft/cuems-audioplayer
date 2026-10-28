@@ -69,6 +69,16 @@ pair stays together; a video-only file next to an audio file of another length d
 gapless, MTC-locked loop with one period per file is rev 3 of 869ejxng3 + 1amfwm7e6cw
 (`cuems-RELATIONS/Plans/2026-10-19-audio-loop-varispeed-869ejxng3-1amfwm7e6cw.md`).
 
+**MKV is unsupported for AudioCues in the 869ejxng3 release (Ion, 2026-10-28)** — until the
+decode thread lands (ClickUp 1amfwm7fe42). The audio callback still demuxes and decodes in
+place; in a matroska file the audio packets sit between large video packets, so a callback
+occasionally reads past megabytes of video. Measured on test2 node01 (step 10, 30 Mb/s h264 +
+AAC mkv, 512-frame periods): one callback of 21.3 ms in 10 min (twice the 10.7 ms period →
+a jackd xrun) and 3.2 ms worst with a cold page cache (30 % of the period, over the 25 %
+budget). A cue on an mkv still plays and loops, but may click. Use mp4/mov/wav, or extract
+the audio. VideoCues on mkv are not affected (the videocomposer decodes in its own threads).
+JACK periods below 512 frames are unsupported for the same reason (same task).
+
 ## Field notes / gotchas
 
 - **Compressed audio aborted at arm until 0.0.3-13 (2026-10-22).** cuems-mediadecoder's
