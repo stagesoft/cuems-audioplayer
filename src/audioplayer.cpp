@@ -38,6 +38,16 @@
 
 #include "audioplayer.h"
 
+#include <algorithm>   // std::find (serviceDayAlignLog)
+#include <type_traits>
+
+// DayAlign::fromOsc() reproduces the pre-day-align /offset bytes only with
+// these exact operand types (float + long int, * unsigned int).
+static_assert(std::is_same<decltype(AudioPlayer::audioMillisecondSize), unsigned int>::value,
+              "DayAlign::fromOsc() byte identity assumes unsigned int audioMillisecondSize");
+static_assert(std::is_same<decltype(AudioPlayer::outputLatencyMs_), std::atomic<long int>>::value,
+              "DayAlign::fromOsc() byte identity assumes a long int output latency");
+
 ////////////////////////////////////////////
 // Initializing static class members
 
@@ -93,6 +103,9 @@ AudioPlayer::AudioPlayer(   int port,
     audioFrameSize = nChannels * headStep;
     audioSecondSize = sampleRate * audioFrameSize;
     audioMillisecondSize = ( (float) sampleRate / 1000 ) * audioFrameSize;
+
+    // Engine /offset values are converted into this process's MTC day (DayAlign)
+    CuemsLogger::getLogger()->logInfo("MTC day-align: on (12 h rule, ext)");
 
     // Adjust initial offset. outputLatencyMs_ is still 0 here (set after
     // startStream() below); the post-stream recompute replaces this store
@@ -507,21 +520,55 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
 
             long long int difference = ap->playHead - mtcHeadInBytes;
 
+            // A new /offset from the engine? Convert it into this process's MTC
+            // day first: the engine counts the 24h wraps since its last reset,
+            // we count ours, and a player spawned after the engine passed 24h
+            // is a day behind. Until our head is authoritative the value stays
+            // pending and the cue holds silence, as before its start
+            // (serviceDayAlignLog() reports one stuck for > 2 s). Atomics only.
+            bool offsetApplied = false;
+            const DayAlign::Resolution res = DayAlign::resolvePending(
+                ap->offsetMailbox_, ap->offsetSeqApplied_, ap->audioMillisecondSize, MtcReceiver::toLocalDay );
+            if ( res.status == DayAlign::Resolve::Applied ) {
+                ap->headOffset.store( res.bytes );
+                ap->offsetUnresolvedSinceMs_.store( 0 );
+                if ( res.k != 0 ) {
+                    ap->dayK_.store( res.k );
+                    ap->dayEngineMs_.store( res.engineMs );
+                    ap->dayHeadMs_.store( ap->mtcReceiver.mtcHead.load() );
+                    ap->dayShifts_.fetch_add( 1 );
+                    ap->dayEvents_.fetch_add( 1 );
+                }
+                offsetApplied = true;
+                // Note: Don't set outOfFile here - let the boundary check below determine that
+            }
+            else if ( res.status == DayAlign::Resolve::Pending ) {
+                if ( ap->offsetUnresolvedSinceMs_.load() == 0 ) {
+                    ap->offsetUnresolvedSinceMs_.store( chrono::duration_cast<chrono::milliseconds>(
+                        chrono::steady_clock::now().time_since_epoch() ).count() );
+                }
+                memset( outputBuffer, 0, nBufferFrames * ap->audioFrameSize );
+                return 0;
+            }
+
             // If our audio play head is too late or out of the boundaries of our mtc frame
             // tolerance... We correct it. Also if the offset changed dynamically via OSC
-            if ( abs(difference) > tolerance || ap->offsetChanged ) {
-                // Set new OSC offset if any
-                if ( ap->offsetChanged ) {
-                    ap->headOffset.store(ap->headNewOffset.load());
-                    // And reset flag
-                    ap->offsetChanged = false;
-                    // Note: Don't set outOfFile here - let the boundary check below determine that
-                }
-
+            if ( abs(difference) > tolerance || offsetApplied ) {
                 // Calculate the actual seek position in the file (accounting for offset)
                 long long seekPosition = mtcHeadInBytes + ap->headOffset.load();
                 unsigned long long fileSize = ap->audioFile.getFileSize();
-                
+
+                // An hour before the media start or past its end right after an
+                // engine offset means a wrong day: flag it once for the log.
+                if ( offsetApplied && !ap->implausibleReported_ &&
+                     DayAlign::implausibleSeek( seekPosition, fileSize, ap->audioMillisecondSize ) ) {
+                    const long long msSize = ap->audioMillisecondSize > 0 ? ap->audioMillisecondSize : 1;
+                    ap->implausibleSeekMs_.store( seekPosition / msSize );
+                    ap->implausibleEndMs_.store( (long long)fileSize / msSize );
+                    ap->implausibleFlag_.store( true );
+                    ap->implausibleReported_ = true;
+                }
+
                 if ( seekPosition < 0 ) {
                     // Before file start: live MTC hasn't reached the cue's start
                     // yet -- covers BOTH an early-armed future cue AND the
@@ -716,14 +763,12 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
 
             CuemsLogger::getLogger()->logInfo("OSC: new offset value " + std::to_string((long int)offsetOSC));
 
-            // Offset argument in OSC command is in milliseconds
-            // so we need to calculate in bytes in our file
-
-            headNewOffset.store(( offsetOSC + outputLatencyMs_.load() ) * audioMillisecondSize);  // To bytes
+            // Offset argument in OSC command is in milliseconds, in the
+            // engine's MTC day; the audio callback converts it into ours and
+            // then to bytes in our file (DayAlign).
+            offsetMailbox_.publish( DayAlign::fromOsc( offsetOSC, outputLatencyMs_.load(), audioMillisecondSize ) );
 
             // Note: With FFmpeg, headers are handled internally - no manual offset needed
-
-            offsetChanged = true;
 
         // Wait
         } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/wait") ) {
@@ -819,5 +864,50 @@ void AudioPlayer::setOutputLatencyMs(long ms) {
     CuemsLogger::getLogger()->logInfo(
         "Audio output latency compensation updated to "
         + std::to_string(ms) + " ms");
+}
+
+//////////////////////////////////////////////////////////
+// Day-alignment log lines, from the atomics the audio callback sets. Non-RT.
+void AudioPlayer::serviceDayAlignLog() {
+    // 1) k line, once per k value per process
+    const unsigned long events = dayEvents_.load();
+    if ( events != dayEventsLogged_ ) {
+        dayEventsLogged_ = events;
+        const long k = dayK_.load();
+        if ( std::find( dayKLogged_.begin(), dayKLogged_.end(), k ) == dayKLogged_.end() ) {
+            dayKLogged_.push_back( k );
+            const std::string line = DayAlign::realignLine( k, dayEngineMs_.load(),
+                                                            dayHeadMs_.load(), dayShifts_.load() );
+            if ( DayAlign::realignIsWarning( k ) )
+                CuemsLogger::getLogger()->logWarning( line );
+            else
+                CuemsLogger::getLogger()->logInfo( line );
+        }
+    }
+
+    // 2) implausible position right after an engine offset, once per process
+    if ( !implausibleLogged_ && implausibleFlag_.load() ) {
+        implausibleLogged_ = true;
+        CuemsLogger::getLogger()->logWarning( "MTC day-align: implausible position seek="
+            + std::to_string( implausibleSeekMs_.load() ) + " ms (file end "
+            + std::to_string( implausibleEndMs_.load() ) + " ms) right after an engine offset"
+            " -- wrong MTC day, or an engine time far from now" );
+    }
+
+    // 3) an engine offset the callback could not resolve for > 2 s with MTC running
+    const long long since = offsetUnresolvedSinceMs_.load();
+    if ( since == 0 ) {
+        unresolvedLogged_ = false;
+    }
+    else if ( !unresolvedLogged_ && mtcReceiver.isTimecodeRunning.load() ) {
+        const long long nowMs = chrono::duration_cast<chrono::milliseconds>(
+            chrono::steady_clock::now().time_since_epoch() ).count();
+        if ( nowMs - since > 2000 ) {
+            unresolvedLogged_ = true;
+            CuemsLogger::getLogger()->logWarning( "MTC day-align: engine offset unresolved for "
+                + std::to_string( nowMs - since ) + " ms with MTC running (MTC head not"
+                " authoritative yet); the cue holds silence" );
+        }
+    }
 }
 
