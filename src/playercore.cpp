@@ -198,7 +198,10 @@ void PlayerCore::drainEngineEvents()
             case A::EvType::SEEK_FAILED: push(LogEvent::SEEK_FAILED, f.a); break;
             case A::EvType::WRAP_FAILED: push(LogEvent::WRAP_FAILED); break;
             case A::EvType::RESET_FAILED: push(LogEvent::RESET_FAILED); break;
-            case A::EvType::LP_MISMATCH: push(LogEvent::LP_MISMATCH, f.a, f.b); break;
+            // c = the file rate, for the tail in ms (R17)
+            case A::EvType::LP_MISMATCH:
+                push(LogEvent::LP_MISMATCH, f.a, f.b, (int64_t)engine_.getSampleRate());
+                break;
             case A::EvType::TINY_LOOP: push(LogEvent::TINY_LOOP, f.a, f.b); break;
             case A::EvType::HEADER_SHORT: push(LogEvent::HEADER_SHORT, f.a, f.b); break;
             case A::EvType::INVARIANT: push(LogEvent::INVARIANT, f.a); break;
@@ -371,8 +374,23 @@ std::string PlayerCore::describe(const LogEvent& e, const std::string& slug, boo
         break;
     case LogEvent::FIFO_DRIFT: *level = 3; snprintf(b, sizeof b, "soxr input fifo drifting: %lld frames", (long long)e.a); break;
     case LogEvent::LP_MISMATCH:
-        *level = 3;
-        snprintf(b, sizeof b, "loop period differs from decoded length: P=%lld L=%lld", (long long)e.a, (long long)e.b);
+        // A period longer than the decoded audio pads silence to the loop
+        // point every pass: by design for a same-file A/V pair whose video is
+        // the longer track by more than 0.5 s (869ejxng3 D15), so a WARNING
+        // with the tail (R17). Shorter cannot reach this line (the cut at P_s
+        // comes before the end of the file); kept as an ERROR for safety.
+        if (e.a > e.b) {
+            *level = 4;
+            snprintf(b, sizeof b,
+                     "loop period P=%lld is %.1f ms longer than the decoded audio L=%lld: padding silence "
+                     "to the loop point every pass (an A/V pair whose video is the longer track)",
+                     (long long)e.a, e.c > 0 ? (double)(e.a - e.b) * 1000.0 / (double)e.c : 0.0,
+                     (long long)e.b);
+        } else {
+            *level = 3;
+            snprintf(b, sizeof b, "loop period differs from decoded length: P=%lld L=%lld", (long long)e.a,
+                     (long long)e.b);
+        }
         break;
     case LogEvent::MODE:
         *stdoutLine = true;

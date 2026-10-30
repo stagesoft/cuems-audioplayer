@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <random>
 #include "feed_test_util.h"
+#include "playercore.h"
 #include <thread>
 #if defined(__SSE2__)
 #include <pmmintrin.h>
@@ -397,9 +398,53 @@ TEST_F(FeedEngine, PadBetweenEndOfFileAndThePeriod) {
     g.runToEnd();
     ASSERT_EQ((long)(g.tap.v.size() / ch), 3 * P);
     EXPECT_EQ(maxDiffPeriodic(g.tap.v, ref, ch, 0, P), 0.0);
-    EXPECT_EQ(g.count(A::EvType::LP_MISMATCH), 1);   // ERROR once per file
+    EXPECT_EQ(g.count(A::EvType::LP_MISMATCH), 1);   // WARNING once per file (R17)
     EXPECT_EQ(g.count(A::EvType::FIRST_EOF), 1);
     EXPECT_EQ(g.s.invariantViolations(), 0);
+}
+
+// The pad's log line (R17): a WARNING with the tail in ms at the file's rate;
+// a period shorter than the decode (unreachable: the cut comes first) an ERROR.
+TEST(FeedLog, PadLineIsAWarningWithTheTail) {
+    LogEvent e;
+    e.type = LogEvent::LP_MISMATCH;
+    e.a = 48000 + 9600;
+    e.b = 48000;
+    e.c = 48000;
+    bool so = false;
+    int lvl = 0;
+    const std::string line = PlayerCore::describe(e, "p1", &so, &lvl);
+    EXPECT_FALSE(so);
+    EXPECT_EQ(lvl, 4);
+    EXPECT_NE(line.find("200.0 ms longer"), std::string::npos) << line;
+    e.a = 47000;
+    PlayerCore::describe(e, "p1", &so, &lvl);
+    EXPECT_EQ(lvl, 3);
+}
+
+// The other pad path (R17): a file shorter than the head cache plays from the
+// cache alone and pads there; the pad is logged once per file there too.
+TEST_F(FeedEngine, PadFromTheCacheAloneIsLoggedOncePerFile) {
+    const std::string p = tmpPath("short500ms");
+    const long L = 24000;                          // 0.5 s at 48 kHz, inside the 1 s cache
+    std::vector<float> x(L);
+    for (long i = 0; i < L; i++) x[i] = 0.5f * (float)std::sin(2.0 * M_PI * 440.0 * i / 48000.0);
+    writeWavF32(p, 48000, 1, x);
+    const long P = L + 4800;                       // 100 ms of pad per pass
+    Rig g;
+    ASSERT_TRUE(g.open(p));
+    g.s.setLoop(5, P, 48000);
+    g.s.start(0, A::StartKind::REVEAL);
+    g.runToEnd();
+    ASSERT_EQ((long)(g.tap.v.size() / g.ch), 5 * P);
+    for (int pass = 0; pass < 5; pass++) {
+        double tail = 0.0;
+        for (long i = L; i < P; i++) tail = std::max(tail, (double)std::fabs(g.tap.v[(size_t)(pass * P + i)]));
+        EXPECT_EQ(tail, 0.0) << "pass " << pass;   // silence to the loop point
+    }
+    EXPECT_EQ(g.count(A::EvType::LP_MISMATCH), 1);   // once per file, not per pass
+    EXPECT_EQ(g.s.invariantViolations(), 0);
+    std::remove(p.c_str());
 }
 
 // T8: a start in the pad region feeds PAD, no seek past EOF.

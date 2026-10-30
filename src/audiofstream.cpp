@@ -2228,7 +2228,16 @@ bool AudioFstream::feedInput(const float*& ptr, size_t& avail, const LiveCtx& ct
             onE12orE13();
             return false;
         }
-        feedSrc = Feed::PAD;                        // the whole file is in the cache and P_s > L
+        // The whole file is in the cache and P_s > L: the pad. Logged once
+        // per file like the decoder path's (869ejxng3 D15, R17): a same-file
+        // A/V pair whose video is the longer track pads by design.
+        if (!lpChecked && pS > 0 && lDec >= 0) {
+            lpChecked = true;
+            if (pS - lDec > (int64_t)fileSampleRate / 1000) {
+                ev(EvType::LP_MISMATCH, pS, lDec);
+            }
+        }
+        feedSrc = Feed::PAD;
         return false;
     }
     case Feed::DECODER: {
@@ -2264,7 +2273,7 @@ bool AudioFstream::feedInput(const float*& ptr, size_t& avail, const LiveCtx& ct
                 if (!lpChecked && pS > 0) {
                     lpChecked = true;
                     if (std::llabs(pS - lDec) > (int64_t)fileSampleRate / 1000) {
-                        ev(EvType::LP_MISMATCH, pS, lDec);   // ERROR once per file; pad / cut
+                        ev(EvType::LP_MISMATCH, pS, lDec);   // once per file: the pad (WARNING, R17)
                     }
                 }
                 cur = lDec;
