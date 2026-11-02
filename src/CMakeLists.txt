@@ -1,3 +1,4 @@
+# SPDX-FileContributor: Ion Reguera <ion@stagelab.coop>
 cmake_minimum_required(VERSION 3.10)
 
 # Project name and version (inherited from parent, but define here for subdirectory)
@@ -22,7 +23,14 @@ target_compile_definitions(mtcreceiver PUBLIC HAVE_CUEMS_LOGGER)
 add_subdirectory(cuemslogger)
 
 # Executable
-add_executable(cuems-audioplayer main.cpp audioplayer.cpp audiofstream.cpp commandlineparser.cpp)
+add_executable(cuems-audioplayer main.cpp audioplayer.cpp audiofstream.cpp playercore.cpp commandlineparser.cpp)
+
+# The test build (plan 869ejxng3 + 1amfwm7e6cw rev 3, I16c): HF_LOG,
+# HF_DROP_LOOP and HF_FAIL_WRAP_SEEK compiled in; never the release build.
+option(CUEMS_TEST_BUILD "Build the player with the test knobs (HF_LOG, HF_DROP_LOOP, HF_FAIL_WRAP_SEEK)" OFF)
+if(CUEMS_TEST_BUILD)
+    target_compile_definitions(cuems-audioplayer PRIVATE CUEMS_TEST_KNOBS)
+endif()
 set_target_properties(cuems-audioplayer PROPERTIES DEBUG_POSTFIX ${CMAKE_DEBUG_POSTFIX})
 
 # Configure file

@@ -1,3 +1,21 @@
+cuems-audioplayer (0.0.3-15) bookworm; urgency=medium
+
+  * Merge rc_1 into debian/bookworm (0.0.3-15, 869ejxng3 batch, PR #9): new
+    playback core. Sample-exact seek, a filtered PI lock loop on the
+    resampler's ratio against MTC extrapolated to the callback, MTC
+    liveness (live / suspended / lost / invalid) and the loop wrap on the
+    engine's period: no gap at the loop point (20-29 ms before). A period
+    longer than the file pads silence (one WARNING per file).
+  * MTC day alignment of /start_tod and /offset (1amfwm7fbqy): a player
+    spawned after the engine passed 24 h no longer starts a day off.
+  * Timing against the wire MTC, measured on .111: within 1 ms. 0.0.3-13
+    plays MOV/compressed audio 17.5 ms late (packet-granular seek) and WAV
+    8.3 ms late.
+  * Supersedes the 0.0.3-14~pre1amfwm7fbqy test line. Needs the matching
+    cuems-engine 0.1.0rc6-7 (it sends /start_tod).
+
+ -- Ion Reguera <ion@stagelab.coop>  Tue, 03 Nov 2026 00:29:57 +0100
+
 cuems-audioplayer (0.0.3-13) bookworm; urgency=high
 
   * Hotfix: AudioCues on compressed audio aborted at arm. cuems-mediadecoder's

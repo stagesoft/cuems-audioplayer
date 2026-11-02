@@ -31,6 +31,19 @@ Dependencies: `librtmidi-dev` (3.0.0), `librtaudio-dev` (**≥ 5.1** — needed 
 
 Reads MTC via its `mtcreceiver` submodule from ALSA `Midi Through Port-0`. After the mtcreceiver `rc_1` `aa44894` resync-hold fix, `mtcHead` is a continuous QF timebase, so audioplayer (raw `mtcHead` read, 2-frame tolerance) needs only the submodule bump — no code change. See the mtcreceiver CLAUDE.md for the 2s-skip root cause.
 
+**Engine start times are converted into this process's MTC day (24 h wrap, 1amfwm7fbqy).** A per-cue player
+spawned after the engine passed 24 h used to put the start a day ahead and hold digital silence while logging
+`MTC -> Play started` (lleida-diposit 2026-10-24). On this line both wires carry the start: `/start_tod` (the
+engine's start as MTC position modulo 24 h, int; replaces `/offset_i`, normalised into [0, 86 400 000) with a WARNING)
+and the legacy float `/offset` (k = 0 keeps `floor(f)` ms exactly). The OSC thread latches the raw value with its wire
+(`dayalign::Wire`); `PlayerCore::resolvePendingOffset()` (`src/playercore.cpp`) resolves it in the callback with
+`MtcReceiver::toLocalDay` (mtcreceiver `eb7ad4f`, nearest day, 12 h rule) and keeps it **pending while the head is not
+authoritative** (the cue holds silence, a running pass keeps its offset). Pure helpers in `src/dayalign.h`, tests in
+`test/test_dayalign.cpp`. Journal: `MTC day-align: on (12 h rule, tod)` at start, `MTC day realign k=…` once per k
+(INFO; WARNING for k < 0 on `/offset`), `offset unresolved` after 2 s, implausible position. The old player line had
+its own implementation of the same rule for `/offset` (`DayAlign::OffsetMailbox`, `695aa28`/`1f51e44`, rc_1 PR #8);
+the 869ejxng3 merge of rc_1 keeps this line's code and drops that one (same contract, different callback).
+
 ## Cue boundary / silence contract
 
 The MTC-correction path in `audioCallback` (`src/audioplayer.cpp`) computes
@@ -68,6 +81,16 @@ video's audio-stream length (the VideoCue's period is its container's audio leng
 pair stays together; a video-only file next to an audio file of another length does not. The
 gapless, MTC-locked loop with one period per file is rev 3 of 869ejxng3 + 1amfwm7e6cw
 (`cuems-RELATIONS/Plans/2026-10-19-audio-loop-varispeed-869ejxng3-1amfwm7e6cw.md`).
+
+**MKV is unsupported for AudioCues in the 869ejxng3 release (Ion, 2026-10-28)** — until the
+decode thread lands (ClickUp 1amfwm7fe42). The audio callback still demuxes and decodes in
+place; in a matroska file the audio packets sit between large video packets, so a callback
+occasionally reads past megabytes of video. Measured on test2 node01 (step 10, 30 Mb/s h264 +
+AAC mkv, 512-frame periods): one callback of 21.3 ms in 10 min (twice the 10.7 ms period →
+a jackd xrun) and 3.2 ms worst with a cold page cache (30 % of the period, over the 25 %
+budget). A cue on an mkv still plays and loops, but may click. Use mp4/mov/wav, or extract
+the audio. VideoCues on mkv are not affected (the videocomposer decodes in its own threads).
+JACK periods below 512 frames are unsupported for the same reason (same task).
 
 ## Field notes / gotchas
 
