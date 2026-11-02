@@ -38,15 +38,10 @@
 #ifndef AUDIOPLAYER_H
 #define AUDIOPLAYER_H
 
-//////////////////////////////////////////////////////////
-// Preprocessor definitions
-#ifndef MTC_FRAMES_TOLERANCE
-#define MTC_FRAMES_TOLERANCE 2
-#endif
-
 #include <atomic>
 #include <math.h>
 #include <chrono>
+#include <memory>
 #include <vector>
 #include <iostream>
 #include <iomanip>
@@ -58,10 +53,16 @@
 #include "cuems_errors.h"
 #include "mtcreceiver.h"
 #include "oscreceiver.h"
-#include "dayalign.h"
+#include "playercore.h"
+#include "qfseqlock.h"
 
 using namespace std;
 
+// The player follows MTC with the feed engine (AudioFstream, plan 869ejxng3 +
+// 1amfwm7e6cw rev 3 step 1) driven by PlayerCore (step 2): content-sample
+// timebase in ns, the trusted-tick seqlock, MTC liveness, the PI lock loop on
+// the resampler's ratio, the latched OSC events, the LOOP acks and a
+// lock-free journal ring drained by the main loop.
 class AudioPlayer : public OscReceiver
 {
     //////////////////////////////////////////////////////////
@@ -85,16 +86,8 @@ class AudioPlayer : public OscReceiver
                         long explicitLatencyMs = -1 );
 
         // Set the audio output-pipeline latency compensation in ms.
-        // Values outside [0, 500] are clamped. Thread-safe (atomic).
-        // Intended for future OSC retuning; the primary path for setting
-        // this at startup is the explicitLatencyMs ctor parameter, which
-        // must be set before the JACK query runs.
+        // Values outside [0, 500] are clamped.
         void setOutputLatencyMs(long ms);
-
-        // Day-alignment log lines (k realign, implausible position,
-        // unresolved offset). The audio callback only sets atomics; call this
-        // from a non-RT thread (main's wait loop).
-        void serviceDayAlignLog();
         ~AudioPlayer( void );
         //////////////////////////////////////////
 
@@ -102,79 +95,39 @@ class AudioPlayer : public OscReceiver
         string audioPath;
 
         unsigned int nChannels;                         // Our default number of audio channels
-        unsigned int sampleRate;                        // Our sample rate
-        unsigned int bufferFrames;                      // 2048 sample frames
+        unsigned int sampleRate;                        // Our sample rate (JACK's)
+        unsigned int bufferFrames;                      // JACK period
         string deviceName;
 
-        unsigned int audioFrameSize;                    // Audio frame size in bytes
-        unsigned int audioSecondSize;                   // Audio second size in bytes
-        unsigned int audioMillisecondSize;              // Audio millisecond size in bytes
-
-        float* intermediate;                            // Audio samples intermediate buffer (32-bit float for JACK)
         float* volumeMaster;                            // Volumen master multiplier
 
         // Our midi, osc and audio objects
         RtAudio audio;
         MtcReceiver mtcReceiver;
         AudioFstream audioFile;
+        std::unique_ptr<PlayerCore> core;
+        TickSeqlock ticks;                              // written by the MTC tick callback
 
         // Stream and playing control flags and vars
-        static std::atomic <bool> endOfStream;                // Is the end of the stream reached already?
-        static std::atomic <bool> endOfPlay;                  // Are we done playing and waiting?
-        static std::atomic <bool> outOfFile;                  // Is our head out of our file boundaries?
-        std::atomic<long int> endTimeStamp{0};  // Our finish timestamp to calculate end wait (atomic for thread safety)
-        bool followingMtc;               // Is player following MTC?
-
-        // Playing head vars and flags
-        static std::atomic<long long int> playHead; // Current reading head position in bytes
-
-        // float headSpeed;                       // Head speed (TO DO)
-        // float headAccel;                       // Head acceleration (TO DO)
-        std::atomic<int> playheadControl = 1;       // Head reading direction
-
-        unsigned int headStep = 4;              // Head step per channel, FLOAT32 format, 4 bytes
-        std::atomic<long int> headOffset{0};    // Head offset (atomic: read/written from multiple threads)
-        // Latest OSC /offset, raw (engine domain), OSC thread -> audio callback.
-        // The callback converts it into this process's day (24h wrap) before
-        // it becomes headOffset; offsetSeqApplied_ is callback-private.
-        DayAlign::OffsetMailbox offsetMailbox_;
-        unsigned long offsetSeqApplied_ = 0;
-        std::atomic<long int> outputLatencyMs_{0}; // JACK output pipeline latency; added to every headOffset compute so audio reaches speakers at wire-MTC (queried once, after startStream)
-        long m_explicitLatencyMs;             // -1 = no override, use JACK-queried value. Set once in ctor from the explicitLatencyMs parameter (fed by --output-latency-ms CLI arg from settings.xml).
+        static std::atomic <bool> endOfPlay;            // Are we done playing and waiting?
+        static std::atomic <bool> quitRequested;        // /quit, SIGTERM, SIGINT: the main loop acts (I16e, J16)
 
         long int endWaitTime = 0;               // End time to wait before quitting
-
         string playerUuid = "";                 // Player UUID for identification porpouses
+        string slug = "";                       // the logger slug, for the stdout ack lines
+        bool stopOnMTCLost = true;              // --ciml: kept for the CLI, no effect in this release (G2)
 
-        bool stopOnMTCLost = true;              // Stop on MTC signal lost?
-        bool mtcSignalLost = false;             // Flag to check MTC signal lost?
-        bool mtcSignalStarted = false;          // Flag to check MTC signal started?
+        // Main loop: write the journal and the mode-change ack lines
+        void drainJournal( void );
 
     //////////////////////////////////////////////////////////
     // Private members
     private:
-
-        // Day-alignment evidence, written by the audio callback (atomics
-        // only), logged by serviceDayAlignLog().
-        std::atomic<long> dayK_{0};
-        std::atomic<long long> dayEngineMs_{0};
-        std::atomic<long long> dayHeadMs_{0};
-        std::atomic<unsigned long> dayShifts_{0};          // conversions with k != 0
-        std::atomic<unsigned long> dayEvents_{0};          // bumped after each k != 0
-        std::atomic<long long> offsetUnresolvedSinceMs_{0}; // steady ms, 0 = none
-        std::atomic<long long> implausibleSeekMs_{0};
-        std::atomic<long long> implausibleEndMs_{0};
-        std::atomic<bool> implausibleFlag_{false};
-        bool implausibleReported_ = false;                 // callback-private
-        // serviceDayAlignLog() state (non-RT thread only)
-        unsigned long dayEventsLogged_ = 0;
-        std::vector<long> dayKLogged_;
-        bool unresolvedLogged_ = false;
-        bool implausibleLogged_ = false;
-
-        // Config functions, maybe to be implemented
-        // bool loadNodeConfig( void );
-        // bool loadMediaConfig( void );
+        std::atomic<long> outputLatencyFrames_{0};
+        long m_explicitLatencyMs;               // -1 = no override, use JACK's value
+        TickSample lastTick_;                   // the audio thread's last seqlock read
+        dayalign::ThrottledCount offsetIErrors_{60000000000LL};   // /offset_i: one ERROR per 60 s (OSC thread)
+        int64_t latencyNs( void ) const;
 
         //////////////////////////////////////////////////////////
         // Callbacks for audio an dmidi

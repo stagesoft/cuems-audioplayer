@@ -37,24 +37,30 @@
 //////////////////////////////////////////////////////////
 
 #include "audioplayer.h"
-
-#include <algorithm>   // std::find (serviceDayAlignLog)
-#include <type_traits>
-
-// DayAlign::fromOsc() reproduces the pre-day-align /offset bytes only with
-// these exact operand types (float + long int, * unsigned int).
-static_assert(std::is_same<decltype(AudioPlayer::audioMillisecondSize), unsigned int>::value,
-              "DayAlign::fromOsc() byte identity assumes unsigned int audioMillisecondSize");
-static_assert(std::is_same<decltype(AudioPlayer::outputLatencyMs_), std::atomic<long int>>::value,
-              "DayAlign::fromOsc() byte identity assumes a long int output latency");
+#include <time.h>
+#include <unistd.h>
+#include "testknobs.h"
 
 ////////////////////////////////////////////
 // Initializing static class members
 
-std::atomic<long long int> AudioPlayer::playHead(0);
-std::atomic <bool> AudioPlayer::endOfStream = false;
 std::atomic <bool> AudioPlayer::endOfPlay = false;
-std::atomic <bool> AudioPlayer::outOfFile = false;
+std::atomic <bool> AudioPlayer::quitRequested = false;
+
+namespace {
+int64_t monoNs()
+{
+    timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+void writeLine(const std::string& s)
+{
+    // one write(2), so a line can never interleave with another thread's output
+    ssize_t r = ::write(STDOUT_FILENO, s.data(), s.size());
+    (void)r;
+}
+}  // namespace
 
 //////////////////////////////////////////////////////////
 AudioPlayer::AudioPlayer(   int port,
@@ -73,60 +79,33 @@ AudioPlayer::AudioPlayer(   int port,
                             long explicitLatencyMs )
                             :   // Members initialization
                             OscReceiver(port, oscRoute.c_str()),
-                            mtcReceiver(MTCRECV_DEFAULT_API, client_name),
                             audioPath(filePath),
                             nChannels(numberOfChannels),
                             sampleRate(sRate),
                             deviceName(deviceName),
-                            m_explicitLatencyMs(explicitLatencyMs),
                             audio(audioApi),
+                            mtcReceiver(MTCRECV_DEFAULT_API, client_name),
                             audioFile(filePath.c_str()),  // Open file to check format
                             endWaitTime(finalWait),
                             stopOnMTCLost(stopOnLostFlag),
-                            followingMtc(mtcFollowFlag)
+                            m_explicitLatencyMs(explicitLatencyMs)
  {
     // Enable network-tolerant MTC timeouts (for rtpmidid / MTC over network)
     mtcReceiver.setNetworkMode(true);
 
-    //////////////////////////////////////////////////////////
-    // Config tasks to be implemented later maybe
-    // loadNodeConfig();
-	// loadMediaConfig();
-
-    //////////////////////////////////////////////////////////
-    // Set up working class members
-
-    // Set resample quality before opening audio stream
+    // --resample-quality is kept for the CLI: libsoxr 0.1.3 always uses vr32
+    // in variable-ratio mode (section 4.3b)
     audioFile.setResampleQuality(resampleQuality);
-
-    // Audio frame size calc (will be updated with actual JACK sample rate later)
-    audioFrameSize = nChannels * headStep;
-    audioSecondSize = sampleRate * audioFrameSize;
-    audioMillisecondSize = ( (float) sampleRate / 1000 ) * audioFrameSize;
-
-    // Engine /offset values are converted into this process's MTC day (DayAlign)
-    CuemsLogger::getLogger()->logInfo("MTC day-align: on (12 h rule, ext)");
-
-    // Adjust initial offset. outputLatencyMs_ is still 0 here (set after
-    // startStream() below); the post-stream recompute replaces this store
-    // with the latency-compensated value.
-    headOffset.store((initOffset + outputLatencyMs_.load()) * audioMillisecondSize);
-    // Note: With FFmpeg, headers are handled internally - no manual offset needed
-
-    // If we have a positive offset initialli we can already
-    // seek the file to its proper initial position
-    if ( (playHead + headOffset.load()) >= 0 )
-        audioFile.seekg( playHead + headOffset.load() , ios_base::beg );
-
-    // Per channel volume param to process audio
-    volumeMaster = new float[nChannels];
-    for ( unsigned short int i = 0; i < nChannels; i++ ) {
-        volumeMaster[i] = 1.0;
+    if (resampleQuality != "hq") {
+        CuemsLogger::getLogger()->logInfo("--resample-quality " + resampleQuality +
+                                          " has no effect: the variable-ratio resampler is always vr32");
     }
 
-    // Per channel process buffer (32-bit float for JACK)
-    intermediate = new float[nChannels];
-
+    // Per channel volume param to process audio
+    volumeMaster = new float[nChannels > 8 ? nChannels : 8];
+    for ( unsigned short int i = 0; i < (nChannels > 8 ? nChannels : 8); i++ ) {
+        volumeMaster[i] = 1.0;
+    }
 
     //////////////////////////////////////////////////////////
     // Setting our audio stream parameters
@@ -273,85 +252,55 @@ AudioPlayer::AudioPlayer(   int port,
     streamOps.flags = RTAUDIO_JACK_DONT_CONNECT;
 
 
+    // Everything that allocates or fixes a size happens BEFORE startStream
+    // (G19): the stream's period and rate, the latency, the final open() of
+    // the file with its output channel count, the head cache, the VR soxr and
+    // every buffer, the core.
     try {
         // For JACK/pw-jack: Query the device's native sample rate to avoid mismatch
-        // This is crucial for pw-jack compatibility where the server rate may differ
-        unsigned int requestedRate = sampleRate;  // Start with constructor's rate
-        
+        unsigned int requestedRate = sampleRate;
         try {
             RtAudio::DeviceInfo deviceInfo = audio.getDeviceInfo(audioDeviceId);
             if (deviceInfo.probed && deviceInfo.sampleRates.size() > 0) {
-                // Use the device's preferred (first) sample rate
                 requestedRate = deviceInfo.sampleRates[0];
-                CuemsLogger::getLogger()->logInfo("Using device native sample rate: " + 
+                CuemsLogger::getLogger()->logInfo("Using device native sample rate: " +
                     std::to_string(requestedRate) + " Hz");
             }
         } catch (...) {
-            // If we can't query, stick with requested rate
-            CuemsLogger::getLogger()->logInfo("Could not query device sample rate, using requested: " + 
+            CuemsLogger::getLogger()->logInfo("Could not query device sample rate, using requested: " +
                 std::to_string(requestedRate) + " Hz");
         }
-        
-        audio.openStream(  &streamParams, 
-                            NULL, 
+
+        audio.openStream(  &streamParams,
+                            NULL,
                             RTAUDIO_FLOAT32,  // JACK's native format
-                            requestedRate,     // Use device's native rate
-                            &bufferFrames, 
+                            requestedRate,
+                            &bufferFrames,
                             &audioCallback,
                             (void *) this,
                             &streamOps );
 
-        audio.startStream();
-        
-        // Get actual JACK sample rate (JACK is the master)
+        // JACK is the master: its rate and its period
         unsigned int jackSampleRate = audio.getStreamSampleRate();
         if (jackSampleRate != 0) {
-            if (jackSampleRate != sampleRate) {
-                CuemsLogger::getLogger()->logInfo("JACK server sample rate: " + std::to_string(jackSampleRate) + 
-                                                   " Hz (application default was " + std::to_string(sampleRate) + " Hz, will resample)");
-            } else {
-                CuemsLogger::getLogger()->logInfo("JACK server sample rate: " + std::to_string(jackSampleRate) + " Hz");
-            }
-            
-            // Use JACK's sample rate
+            CuemsLogger::getLogger()->logInfo("JACK server sample rate: " + std::to_string(jackSampleRate) + " Hz");
             sampleRate = jackSampleRate;
-
-            // Recalculate timing with actual JACK sample rate
-            audioSecondSize = sampleRate * audioFrameSize;
-            audioMillisecondSize = ( (float) sampleRate / 1000 ) * audioFrameSize;
-
-            if (m_explicitLatencyMs >= 0) {
-                // Explicit override from --output-latency-ms CLI arg
-                // (fed by settings.xml). Suppress the JACK query so the
-                // operator-configured value wins.
-                long clamped = m_explicitLatencyMs;
-                if (clamped > 500) clamped = 500;
-                outputLatencyMs_.store(clamped);
-                CuemsLogger::getLogger()->logInfo(
-                    "Audio output latency explicitly set to "
-                    + std::to_string(clamped)
-                    + " ms (CLI override; JACK query skipped)");
-            } else {
-                // Query JACK output latency now that the stream is running and
-                // sampleRate reflects JACK's actual rate. Cached for use in
-                // headOffset computations so audio reaches speakers at wire-MTC
-                // (post-Phase-2 mtcreceiver has no implicit +80 ms bias). JACK
-                // period size is assumed fixed per show.
-                long latencyFrames = audio.getStreamLatency();
-                if (latencyFrames < 0) latencyFrames = 0;
-                long latencyMs = (latencyFrames * 1000LL) / sampleRate;
-                outputLatencyMs_.store(latencyMs);
-                CuemsLogger::getLogger()->logInfo(
-                    "JACK output latency: " + std::to_string(latencyFrames)
-                    + " frames (" + std::to_string(latencyMs) + " ms) @ "
-                    + std::to_string(sampleRate) + " Hz");
-            }
-
-            // Recalculate offset with correct sample rate
-            headOffset.store((initOffset + outputLatencyMs_.load()) * audioMillisecondSize);
-            // Note: With FFmpeg, headers are handled internally - no manual offset needed
         }
-        
+
+        // The output latency, kept in frames (section 4.2: not truncated to ms)
+        if (m_explicitLatencyMs >= 0) {
+            long clamped = m_explicitLatencyMs > 500 ? 500 : m_explicitLatencyMs;
+            outputLatencyFrames_.store(clamped * (long)sampleRate / 1000);
+            CuemsLogger::getLogger()->logInfo("Audio output latency explicitly set to " + std::to_string(clamped) +
+                                              " ms (CLI override; JACK query skipped)");
+        } else {
+            long latencyFrames = audio.getStreamLatency();
+            if (latencyFrames < 0) latencyFrames = 0;
+            outputLatencyFrames_.store(latencyFrames);
+            CuemsLogger::getLogger()->logInfo("JACK output latency: " + std::to_string(latencyFrames) + " frames @ " +
+                                              std::to_string(sampleRate) + " Hz");
+        }
+
         // Check if we already have a valid audio file
         if (!audioFile.good()) {
             std::string str = "Error opening audio file: " + audioPath;
@@ -359,7 +308,7 @@ AudioPlayer::AudioPlayer(   int port,
             CuemsLogger::getLogger()->logError(str);
             exit(CUEMS_EXIT_AUDIO_DEVICE_ERR);
         }
-        
+
         // Get the file's actual channel count
         unsigned int fileChannels = audioFile.getChannels();
         
@@ -427,8 +376,46 @@ AudioPlayer::AudioPlayer(   int port,
             nChannels = fileChannels;
         }
         
-        // Configure resampling in audio file if needed (libsoxr will handle rate conversion)
-        audioFile.setTargetSampleRate(sampleRate);
+        // The feed engine: head cache, VR soxr, worker (E1)
+        if (!audioFile.prepareFeed(sampleRate, bufferFrames, true)) {
+            std::string str = "Error preparing the audio feed: " + audioPath;
+            std::cerr << str << endl;
+            CuemsLogger::getLogger()->logError(str);
+            exit(CUEMS_EXIT_AUDIO_DEVICE_ERR);
+        }
+        core.reset(new PlayerCore(audioFile, sampleRate, bufferFrames));
+        core->setOffsetMs((double)initOffset);
+        core->setLatencyNs(latencyNs());
+        core->setFollowing(mtcFollowFlag);
+        core->setEndWaitMs(endWaitTime);
+#ifdef CUEMS_TEST_KNOBS
+        if (testknobs::knobs().failWrap) audioFile.failNextJob(AudioFstream::JobKind::WRAP);
+#endif
+
+        // The trusted-tick seqlock's writer: mtcreceiver's tick callback (the MIDI thread)
+        MtcReceiver::setTickCallback([this](long headMs, bool complete) {
+            const int64_t now = monoNs();
+            ticks.onTick(headMs, complete, now);
+#ifdef CUEMS_TEST_KNOBS
+            if (testknobs::knobs().f) {
+                TickSample t;
+                ticks.read(t);
+                testknobs::knobs().ticks.push({now, headMs, complete ? 1 : 0, (int)t.run, t.anchored ? 1 : 0});
+            }
+#endif
+        });
+
+        audio.startStream();
+
+        // The latency again, now that the ports run (it is fixed per show)
+        if (m_explicitLatencyMs < 0) {
+            long latencyFrames = audio.getStreamLatency();
+            if (latencyFrames > 0 && latencyFrames != outputLatencyFrames_.load()) {
+                outputLatencyFrames_.store(latencyFrames);
+                core->setLatencyNs(latencyNs());
+                CuemsLogger::getLogger()->logInfo("JACK output latency after start: " + std::to_string(latencyFrames) + " frames");
+            }
+        }
     }
     catch (RtAudioError &error) {
         std::cerr << error.getMessage();
@@ -437,12 +424,11 @@ AudioPlayer::AudioPlayer(   int port,
         CuemsLogger::getLogger()->logInfo( "Exiting with result code: " + std::to_string(CUEMS_EXIT_AUDIO_DEVICE_ERR) );
         exit( CUEMS_EXIT_AUDIO_DEVICE_ERR );
     }
-
-
 }
 
 //////////////////////////////////////////////////////////
 AudioPlayer::~AudioPlayer( void ) {
+    MtcReceiver::setTickCallback(nullptr);
     try {
         // Stop the stream
         audio.abortStream();
@@ -454,10 +440,15 @@ AudioPlayer::~AudioPlayer( void ) {
 
     // Clean up
     audio.closeStream();
+    // E19: the worker is joined before the file closes (AudioFstream::close)
+    audioFile.close();
 
     // Delete dinamically reserved members
     delete []volumeMaster;
-    delete []intermediate;
+}
+
+int64_t AudioPlayer::latencyNs( void ) const {
+    return sampleRate ? (int64_t)outputLatencyFrames_.load() * 1000000000LL / sampleRate : 0;
 }
 
 //////////////////////////////////////////////////////////
@@ -466,374 +457,225 @@ int AudioPlayer::audioCallback( void *outputBuffer, void * /*inputBuffer*/, unsi
             double /*streamTime*/, RtAudioStreamStatus /*status*/, void *data ) {
 
     AudioPlayer *ap = (AudioPlayer*) data;
+    float* out = (float*)outputBuffer;
+    const int64_t now = monoNs();
 
-    // If we are receiving MTC and following it...
-    // Or we are not receiving it and we do not stop on its lost
-    // And we haven't reached the end of the file...
-    if (    ( (ap->mtcReceiver.isTimecodeRunning && ap->followingMtc) || 
-            (ap->mtcSignalLost && !ap->stopOnMTCLost) ) &&
-            ap->playheadControl == 1 ) {
-        unsigned int count = 0;
-        unsigned int read = 0;
-
-        // Check play control flags
-        // If there is MTC signal and we haven't started, check it
-        if ( ap->mtcReceiver.isTimecodeRunning ) {
-            if ( !ap->mtcSignalStarted ) {
-                CuemsLogger::getLogger()->logInfo("MTC -> Play started");
-                ap->mtcSignalStarted = true;
-            }
-            else {
-                if ( ap->mtcSignalLost ) {
-                    CuemsLogger::getLogger()->logInfo("MTC -> Play resumed");
-                }
-            }
-
-            // Receiving MTC, means that signal is not lost anymore
-            ap->mtcSignalLost = false;
-        }
-        // Either, if there is no MTC signal and we already started, it is lost
-        else {
-            if ( ap->mtcSignalStarted && !ap->mtcSignalLost ) {
-                CuemsLogger::getLogger()->logInfo("MTC signal lost");
-                ap->mtcSignalLost = true;
-            }
-        }
-
-        // Now we start playing in two different cases:
-        // 1) after MTC: if there is MTC signal then we treat it
-        if ( ap->mtcReceiver.isTimecodeRunning && ap->followingMtc && !ap->mtcSignalLost )
-        {
-            // Tolerance 2 frames as a jitter budget against network-MTC
-            // arrival variance. Not related to any implicit MTC bias —
-            // mtcreceiver returns raw wire-MTC post-Phase-2.
-            // Validate frame rate to prevent division by zero
-            unsigned char frameRate = ap->mtcReceiver.curFrameRate.load();
-            if (frameRate == 0) {
-                frameRate = 25;  // Default to 25fps
-                CuemsLogger::getLogger()->logWarning("MTC frame rate invalid (0), defaulting to 25fps");
-            }
-            long int tolerance = MTC_FRAMES_TOLERANCE * ( 1000 / (float) frameRate ) * ap->audioMillisecondSize;
-            
-            // Use long long to prevent overflow for long files (multi-hour) with high sample rates
-            long long int mtcHeadInBytes = (long long int)ap->mtcReceiver.mtcHead.load() * ap->audioMillisecondSize;
-
-            long long int difference = ap->playHead - mtcHeadInBytes;
-
-            // A new /offset from the engine? Convert it into this process's MTC
-            // day first: the engine counts the 24h wraps since its last reset,
-            // we count ours, and a player spawned after the engine passed 24h
-            // is a day behind. Until our head is authoritative the value stays
-            // pending and the cue holds silence, as before its start
-            // (serviceDayAlignLog() reports one stuck for > 2 s). Atomics only.
-            bool offsetApplied = false;
-            const DayAlign::Resolution res = DayAlign::resolvePending(
-                ap->offsetMailbox_, ap->offsetSeqApplied_, ap->audioMillisecondSize, MtcReceiver::toLocalDay );
-            if ( res.status == DayAlign::Resolve::Applied ) {
-                ap->headOffset.store( res.bytes );
-                ap->offsetUnresolvedSinceMs_.store( 0 );
-                if ( res.k != 0 ) {
-                    ap->dayK_.store( res.k );
-                    ap->dayEngineMs_.store( res.engineMs );
-                    ap->dayHeadMs_.store( ap->mtcReceiver.mtcHead.load() );
-                    ap->dayShifts_.fetch_add( 1 );
-                    ap->dayEvents_.fetch_add( 1 );
-                }
-                offsetApplied = true;
-                // Note: Don't set outOfFile here - let the boundary check below determine that
-            }
-            else if ( res.status == DayAlign::Resolve::Pending ) {
-                if ( ap->offsetUnresolvedSinceMs_.load() == 0 ) {
-                    ap->offsetUnresolvedSinceMs_.store( chrono::duration_cast<chrono::milliseconds>(
-                        chrono::steady_clock::now().time_since_epoch() ).count() );
-                }
-                memset( outputBuffer, 0, nBufferFrames * ap->audioFrameSize );
-                return 0;
-            }
-
-            // If our audio play head is too late or out of the boundaries of our mtc frame
-            // tolerance... We correct it. Also if the offset changed dynamically via OSC
-            if ( abs(difference) > tolerance || offsetApplied ) {
-                // Calculate the actual seek position in the file (accounting for offset)
-                long long seekPosition = mtcHeadInBytes + ap->headOffset.load();
-                unsigned long long fileSize = ap->audioFile.getFileSize();
-
-                // An hour before the media start or past its end right after an
-                // engine offset means a wrong day: flag it once for the log.
-                if ( offsetApplied && !ap->implausibleReported_ &&
-                     DayAlign::implausibleSeek( seekPosition, fileSize, ap->audioMillisecondSize ) ) {
-                    const long long msSize = ap->audioMillisecondSize > 0 ? ap->audioMillisecondSize : 1;
-                    ap->implausibleSeekMs_.store( seekPosition / msSize );
-                    ap->implausibleEndMs_.store( (long long)fileSize / msSize );
-                    ap->implausibleFlag_.store( true );
-                    ap->implausibleReported_ = true;
-                }
-
-                if ( seekPosition < 0 ) {
-                    // Before file start: live MTC hasn't reached the cue's start
-                    // yet -- covers BOTH an early-armed future cue AND the
-                    // ordinary near-boundary timing slop at a reveal crossing.
-                    // HOLD SILENCE and keep waiting -- do NOT set
-                    // endOfStream/outOfFile here, or the read block below
-                    // (guarded by !outOfFile) is skipped, count stays 0 and the
-                    // cue is terminated before it ever plays ("Out of file
-                    // boundaries!"). Set playHead so (playHead + headOffset) stays
-                    // < 0, routing the read below into the existing "before file
-                    // start -> silence" branch until MTC crosses the start.
-                    ap->endOfStream = false;
-                    ap->outOfFile = false;
-                    if ( ap->audioFile.eof() ) {
-                        ap->audioFile.clear();
-                    }
-                    // Park the stream deterministically at byte 0 while holding.
-                    // The hold->play transition happens when playHead crosses
-                    // -headOffset naturally -- no correction/seekg necessarily
-                    // fires at that instant (playHead and mtcHeadInBytes advance
-                    // in lockstep during silence, so |difference| stays under
-                    // tolerance). The first real read must therefore resume from
-                    // the true start, not from a stale cursor left by a prior
-                    // play in this same per-cue process (STOP/GO re-arm, loop, or
-                    // an OSC-offset resurrection could otherwise replay wrong
-                    // content, or hit EOF -> count==0 -> premature termination).
-                    ap->audioFile.seekg( 0 , ios_base::beg );
-                    ap->playHead = seekPosition - ap->headOffset.load();
-                }
-                else if ( seekPosition <= (long long)fileSize ) {
-
-                    ap->endOfStream = false;
-                    ap->outOfFile = false;
-                    if ( ap->audioFile.eof() ) {
-                        ap->audioFile.clear();
-                    }
-                    // Seek to the calculated position
-                    ap->audioFile.seekg( seekPosition , ios_base::beg );
-                    // Update playHead to match where we actually are (without offset, as offset is separate)
-                    ap->playHead = seekPosition - ap->headOffset.load();
-                }
-                else {
-                    // Past end of file: genuine end of stream.
-                    // Logged once per entry (1amfwm7e4x3): this branch runs on
-                    // every callback while MTC moves on past the end, and
-                    // outOfFile is reset only when the position comes back in
-                    // bounds or a read returns data. Position and limit in ms,
-                    // so a cue that dies mid-file says where.
-                    if ( !ap->outOfFile ) {
-                        const long long msSize = ap->audioMillisecondSize > 0 ? ap->audioMillisecondSize : 1;
-                        CuemsLogger::getLogger()->logInfo("Out of file boundaries! seek=" +
-                            std::to_string(seekPosition / msSize) + " ms, end=" +
-                            std::to_string((long long)fileSize / msSize) + " ms");
-                    }
-                    // Clear error flags to allow responding to future offset changes
-                    // (e.g., when OSC offset command moves position back into bounds)
-                    ap->audioFile.clear();
-                    ap->endOfStream = true;
-                    ap->outOfFile = true;
-                }
-
-            }
-        }
-
-        // 2) without MTC: we do not treat it but, in any case, we continue playing
-        //      while we are not out of the file boundaries
-        // Total bytes of this buffer (also what the zero-fill below completes)
-        const unsigned long int bytesToRead = nBufferFrames * ap->audioFrameSize;
-
-        if ( !ap->outOfFile ) {
-            if ( (ap->playHead + ap->headOffset.load()) >= 0 ) {
-                // Read entire buffer in ONE call - much more efficient for resampling!
-                ap->audioFile.read((char*) outputBuffer, bytesToRead);
-                count = ap->audioFile.gcount();
-                
-                // Apply volume to each sample
-                float* floatBuffer = (float*)outputBuffer;
-                for ( unsigned int i = 0; i < count / 4; i++ ) {
-                    floatBuffer[i] *= ap->volumeMaster[i % ap->nChannels];
-                }
-            }
-            else {
-                // Before file start - fill with silence
-                memset(outputBuffer, 0, bytesToRead);
-                count = bytesToRead;
-            }
-
-            ap->playHead += count;
-        }
-
-        // If we didn't read enough bytes to fill the buffer, zero the rest of
-        // it. count is in BYTES: comparing it with nBufferFrames (frames) left
-        // a short final read unfilled, and the previous period's audio played
-        // again at every end of file (D3, 2-5 ms measured on test2).
-        if ( count < bytesToRead ) {
-            memset( (char *)(outputBuffer) + count, 0, bytesToRead - count );
-        }
-
-        // If we did not read anything, we are out of boundaries, maybe...
-        if ( count == 0 ) {
-            // Maybe it is the end of the stream
-            if ( ap->endWaitTime == 0 ) {
-                // If there is not waiting time, we just finish
-                // and we end the stream by returning a positive value
-                ap->endOfPlay = true;
-                
-                return 1;
-            }
-            else {
-                // If we have waiting time set...
-                if ( ap->endTimeStamp.load() == 0 ) {
-                    // We note down our timestamp
-                    ap->endTimeStamp.store(chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count());
-
-                    std::string str;
-                    if ( ap->endWaitTime == __LONG_MAX__ ) 
-                        str = "for quit command";
-                    else
-                        str = std::to_string( ap->endWaitTime ) + " ms";
-
-                    CuemsLogger::getLogger()->logInfo("Out of file boundaries, waiting " + str);
-                }
-                
-                ap->endOfStream = true;
-
-                long int timecodeNow = chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count();
-                
-                if ( ( timecodeNow - ap->endTimeStamp.load() ) > ap->endWaitTime ) {
-                    CuemsLogger::getLogger()->logInfo("Waiting time exceded, ending audioplayer");
-                    ap->endOfPlay = true;
-                    return 1;
-                }
-                
-                
-            }
-        }
-        else {
-            ap->endOfStream = false;
-            ap->endOfPlay = false;
-            ap->endTimeStamp.store(0);
-            ap->outOfFile = false;
-        }
+    if (!ap->core) {
+        memset(out, 0, nBufferFrames * ap->nChannels * sizeof(float));
+        return 0;
     }
-    // If we are not playing audio... Just copy silence...
-    else
-    {
-        // MTC signal lost detection is already handled in the main playing branch above (lines 418-422)
-        // No need to duplicate it here
-        memset( (char *)(outputBuffer), 0, nBufferFrames * ap->audioFrameSize );
+    // the seqlock: at most 3 retries, otherwise the previous sample
+    ap->ticks.read(ap->lastTick_);
+    ap->core->callback(out, nBufferFrames, now, MtcReceiver::mtcHead.load(), ap->lastTick_);
+
+    // Apply volume to each sample
+    const unsigned ch = ap->nChannels;
+    for ( unsigned int i = 0; i < nBufferFrames * ch; i++ ) {
+        out[i] *= ap->volumeMaster[i % ch];
     }
 
+#ifdef CUEMS_TEST_KNOBS
+    testknobs::knobs().dumpPush(out, (size_t)nBufferFrames * ch);
+    if (testknobs::knobs().f) {
+        const lockloop::Mtc m = ap->core->mtc();
+        testknobs::knobs().periods.push({now, (int64_t)(ap->core->target()), 0, (int)m, ap->audioFile.pos(),
+                                         ap->core->loop().ef(), ap->core->loop().u(), ap->audioFile.fifo(),
+                                         (monoNs() - now) / 1000, (int)ap->audioFile.feed(),
+                                         ap->audioFile.feedPassIndex(), ap->audioFile.cursor(),
+                                         ap->audioFile.inputConsumed(),
+                                         (int64_t)ap->audioFile.lastPeriodProduced()});
+    }
+#endif
+
+    if (ap->core->endOfPlay()) {
+        ap->endOfPlay = true;
+        return 1;   // as today: the -w time is over, end the stream
+    }
     return 0;
+}
 
+//////////////////////////////////////////////////////////
+// Main loop: the journal ring and the mode-change ack lines (section 4.3e)
+void AudioPlayer::drainJournal( void ) {
+    if (!core) return;
+    LogEvent e;
+    while (core->popLog(e)) {
+        bool toStdout = false;
+        int level = 6;
+        const std::string line = PlayerCore::describe(e, slug, &toStdout, &level);
+        if (toStdout) {
+            writeLine(line);
+            continue;
+        }
+        switch (level) {
+        case 3: CuemsLogger::getLogger()->logError(line); break;
+        case 4: CuemsLogger::getLogger()->logWarning(line); break;
+        case 7: CuemsLogger::getLogger()->logDebug(line); break;
+        default: CuemsLogger::getLogger()->logInfo(line); break;
+        }
+    }
+#ifdef CUEMS_TEST_KNOBS
+    static int64_t lastFlush = 0;
+    const int64_t now = monoNs();
+    if (now - lastFlush >= 1000000000LL) {
+        lastFlush = now;
+        testknobs::knobs().flush();
+    }
+#endif
 }
 
 ////////////////////////////////////////////
-// OSC process message callback
+// OSC process message callback (the OSC thread)
+// Every event the audio thread acts on is latched and applied at the top of
+// the next callback in arrival order (section 4.3h, h.1).
 void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m, 
             const IpEndpointName& /*remoteEndpoint*/ )
 {
     try{
-        // Parsing OSC audioplayer messages
+        const string addr = (string) m.AddressPattern();
+        auto is = [&](const char* a) { return addr == (OscReceiver::oscAddress + a); };
+        auto intArg = [](const osc::ReceivedMessageArgument& a, int32_t& v) -> bool {
+            if (a.IsInt32()) { v = a.AsInt32(); return true; }
+            if (a.IsFloat()) { v = (int32_t)std::floor(a.AsFloat()); return true; }
+            if (a.IsInt64()) { v = (int32_t)a.AsInt64(); return true; }
+            return false;
+        };
         // Volume channel 0
-        if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/vol0") ) {
-            // osc::ReceivedMessageArgumentStream args = m.ArgumentStream();
-            // args >> volumeMaster[0] >> osc::EndMessage;
+        if ( is("/vol0") ) {
             m.ArgumentStream() >> volumeMaster[0] >> osc::EndMessage;
             CuemsLogger::getLogger()->logInfo("OSC: new volume channel 0 " + std::to_string(volumeMaster[0]));
-            
         // Volume channel 1
-        } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/vol1") ) {
-            // osc::ReceivedMessageArgumentStream args = m.ArgumentStream();
-            // args >> volumeMaster[1] >> osc::EndMessage;
+        } else if ( is("/vol1") ) {
             m.ArgumentStream() >> volumeMaster[1] >> osc::EndMessage;
             CuemsLogger::getLogger()->logInfo("OSC: new volume channel 1 " + std::to_string(volumeMaster[1]));
-            
         // Volume master
-        } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/volmaster") ) {
-            // osc::ReceivedMessageArgumentStream args = m.ArgumentStream();
-            // args >> volumeMaster[0] >> osc::EndMessage;
-            m.ArgumentStream() >> volumeMaster[0] >> osc::EndMessage;
-            volumeMaster[1] = volumeMaster[0];
-            CuemsLogger::getLogger()->logInfo("OSC: new volume master " + std::to_string(volumeMaster[0]));
-
-        // Offset
-        } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/offset") ) {
-            // osc::ReceivedMessageArgumentStream args = m.ArgumentStream();
-            // args >> volumeMaster[0] >> osc::EndMessage;
+        } else if ( is("/volmaster") ) {
+            float v;
+            m.ArgumentStream() >> v >> osc::EndMessage;
+            for (unsigned i = 0; i < nChannels; i++) volumeMaster[i] = v;
+            CuemsLogger::getLogger()->logInfo("OSC: new volume master " + std::to_string(v));
+        // Offset (float ms, floored as today)
+        } else if ( is("/offset") ) {
             float offsetOSC;
             m.ArgumentStream() >> offsetOSC >> osc::EndMessage;
-            offsetOSC = floor(offsetOSC);
-
-            CuemsLogger::getLogger()->logInfo("OSC: new offset value " + std::to_string((long int)offsetOSC));
-
-            // Offset argument in OSC command is in milliseconds, in the
-            // engine's MTC day; the audio callback converts it into ours and
-            // then to bytes in our file (DayAlign).
-            offsetMailbox_.publish( DayAlign::fromOsc( offsetOSC, outputLatencyMs_.load(), audioMillisecondSize ) );
-
-            // Note: With FFmpeg, headers are handled internally - no manual offset needed
-
+            int64_t ms = 0;
+            if (!dayalign::floorMs(offsetOSC, &ms)) {
+                CuemsLogger::getLogger()->logError("OSC: /offset value " + std::to_string(offsetOSC)
+                                                   + " is not a finite time: ignored");
+                return;
+            }
+            OscEvent e;
+            e.type = OscEvent::OFFSET_F;
+            e.f = offsetOSC;
+            core->latch(e);
+            CuemsLogger::getLogger()->logInfo("OSC: new offset value " + std::to_string((long long)ms));
+        // Cue start as MTC position modulo 24 h (day alignment §7.2; it replaces
+        // /offset_i): normalised into [0, DAY) with a WARNING, never rejected
+        } else if ( is("/start_tod") ) {
+            auto it = m.ArgumentsBegin();
+            if (it == m.ArgumentsEnd()) {
+                CuemsLogger::getLogger()->logError("OSC: /start_tod without a value: ignored");
+                return;
+            }
+            bool changed = false;
+            int64_t v = 0;
+            if (it->IsInt32()) v = dayalign::normalizeTod(it->AsInt32(), &changed);
+            else if (it->IsInt64()) v = dayalign::normalizeTod(it->AsInt64(), &changed);
+            else if (it->IsFloat() || it->IsDouble()) {
+                const double f = it->IsFloat() ? (double)it->AsFloat() : it->AsDouble();
+                if (!dayalign::todFromFloat(f, &v, &changed)) {
+                    CuemsLogger::getLogger()->logError("OSC: /start_tod value " + std::to_string(f)
+                                                       + " is not a finite time: ignored");
+                    return;
+                }
+            } else {
+                CuemsLogger::getLogger()->logError("OSC: /start_tod with a non-numeric value: ignored");
+                return;
+            }
+            if (changed)
+                CuemsLogger::getLogger()->logWarning("OSC: /start_tod value out of [0, 86400000): normalised to "
+                                                     + std::to_string(v));
+            OscEvent e;
+            e.type = OscEvent::START_TOD;
+            e.a = (int32_t)v;
+            core->latch(e);
+            CuemsLogger::getLogger()->logInfo("OSC: new start_tod value " + std::to_string(v));
+        // /offset_i is gone (day alignment §7.2, packages installed together):
+        // loud, and the value is ignored; at most one ERROR per 60 s, with a count
+        } else if ( is("/offset_i") ) {
+            const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            uint64_t n = 0;
+            if (offsetIErrors_.hit(nowNs, &n))
+                CuemsLogger::getLogger()->logError("/offset_i received: engine and player versions do not match"
+                    + (n > 1 ? " (" + std::to_string(n) + " since the last line)" : std::string()));
+        // Loop: i:passes [i:period_num i:period_den], parsed leniently (section 4.2)
+        } else if ( is("/loop") ) {
+#ifdef CUEMS_TEST_KNOBS
+            if (testknobs::knobs().loopsDropped.load() < testknobs::knobs().dropLoop) {
+                testknobs::knobs().loopsDropped.fetch_add(1);
+                CuemsLogger::getLogger()->logWarning("HF_DROP_LOOP: /loop dropped");
+                return;
+            }
+#endif
+            OscEvent e;
+            e.type = OscEvent::LOOP;
+            int32_t v[3] = {1, 0, 0};
+            int n = 0;
+            for (auto it = m.ArgumentsBegin(); it != m.ArgumentsEnd() && n < 3; ++it) {
+                if (!intArg(*it, v[n])) break;
+                n++;
+            }
+            if (n == 0) n = 1;
+            e.a = v[0]; e.b = v[1]; e.c = v[2]; e.nargs = n;
+            core->latch(e);
+            // the receipt ack: written here (not a real-time thread), with the
+            // PREVIOUS mode and its version (L6)
+            writeLine(core->loopAckLine(slug, v[0], n >= 3 ? v[1] : 0, n >= 3 ? v[2] : 0));
         // Wait
-        } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/wait") ) {
-            // osc::ReceivedMessageArgumentStream args = m.ArgumentStream();
-            // args >> volumeMaster[0] >> osc::EndMessage;
+        } else if ( is("/wait") ) {
             float waitOSC;
             m.ArgumentStream() >> waitOSC >> osc::EndMessage;
             waitOSC = floor(waitOSC);
-
             CuemsLogger::getLogger()->logInfo("OSC: new end wait value " + std::to_string((long int)waitOSC));
-
             endWaitTime = waitOSC;             // In milliseconds
-        // Load
-        } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/load") ) {
-            const char* newPath;
-            m.ArgumentStream() >> newPath >> osc::EndMessage;
-            audioPath = newPath;
-            CuemsLogger::getLogger()->logInfo("OSC: /load command");
-            audioFile.close();
-            CuemsLogger::getLogger()->logInfo("OSC: previous file closed");
-            audioFile.loadFile(audioPath);
-            CuemsLogger::getLogger()->logInfo("OSC: loaded new path -> " + audioPath);
-        // Play/pause
-        } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/play") ) {
-            CuemsLogger::getLogger()->logInfo("OSC: /play command");
-            if ( playheadControl != 0 )
-                playheadControl = 0;
-            else 
-                playheadControl = 1;
-        // Stop
-        } else if ( (string) m.AddressPattern() == (OscReceiver::oscAddress + "/stop") ) {
-            // TO DO : right now is the same as play/pause... Don't know if there 
-            //          will be other implementations of the command...
-            CuemsLogger::getLogger()->logInfo("OSC: /stop command");
-            if ( playheadControl != 0 )
-                playheadControl = 0;
-            else 
-                playheadControl = 1;
-        // Quit
-        } else if ( (string)m.AddressPattern() == (OscReceiver::oscAddress + "/quit") ) {
+            core->setEndWaitMs(endWaitTime);
+        // Load: refused while a stream is open (K4, E20)
+        } else if ( is("/load") ) {
+            CuemsLogger::getLogger()->logError("OSC: /load refused while a stream is open");
+        // Play/pause, stop (E25: refused, WARNING once)
+        } else if ( is("/play") || is("/stop") ) {
+            OscEvent e;
+            e.type = OscEvent::PLAY_STOP;
+            core->latch(e);
+        // Quit: a flag the main loop acts on (I16e, J16)
+        } else if ( is("/quit") ) {
             CuemsLogger::getLogger()->logInfo("OSC: /quit command");
-            raise(SIGTERM);
+            quitRequested = true;
         // Check
-        } else if ( (string)m.AddressPattern() == (OscReceiver::oscAddress + "/check") ) {
+        } else if ( is("/check") ) {
             CuemsLogger::getLogger()->logInfo("OSC: /check command");
             raise(SIGUSR1);
-        // Stop on lost - value: 0 = continue playing, non-zero = stop on MTC lost
-        } else if ( (string)m.AddressPattern() == (OscReceiver::oscAddress + "/stoponlost") ) {
-            int32_t valueOSC;
+        // Stop on lost (E26: ignored in this release, WARNING once)
+        } else if ( is("/stoponlost") ) {
+            int32_t valueOSC = 0;
             m.ArgumentStream() >> valueOSC >> osc::EndMessage;
-            stopOnMTCLost = (valueOSC != 0);
-            CuemsLogger::getLogger()->logInfo("OSC: /stoponlost set to " + std::to_string(stopOnMTCLost));
+            OscEvent e;
+            e.type = OscEvent::STOPONLOST;
+            e.a = valueOSC;
+            core->latch(e);
         // MTC Follow - value: 0 = don't follow MTC, non-zero = follow MTC
-        } else if ( (string)m.AddressPattern() == (OscReceiver::oscAddress + "/mtcfollow") ) {
+        } else if ( is("/mtcfollow") ) {
             int32_t valueOSC;
             m.ArgumentStream() >> valueOSC >> osc::EndMessage;
-            followingMtc = (valueOSC != 0);
-            CuemsLogger::getLogger()->logInfo("OSC: /mtcfollow set to " + std::to_string(followingMtc));
+            OscEvent e;
+            e.type = OscEvent::MTCFOLLOW;
+            e.a = valueOSC;
+            core->latch(e);
+            CuemsLogger::getLogger()->logInfo("OSC: /mtcfollow set to " + std::to_string(valueOSC != 0));
         }
         
     } catch ( osc::Exception& error ) {
-        // any parsing errors such as unexpected argument types, or 
-        // missing arguments get thrown as exceptions.
-        // std::cerr << "Error while parsing OSC message: "
-        //     << m.AddressPattern() << ": " << error.what() << "\n";
         CuemsLogger::getLogger()->logError(  "OSC ERR : " + 
                                         (std::string) m.AddressPattern() + 
                                         ": " + (std::string) error.what() );
@@ -841,73 +683,12 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
 }
 
 //////////////////////////////////////////////////////////
-/*
-bool AudioPlayer::loadNodeConfig( void ) {
-    cerr << "Node config read!" << endl;
-    return true;
-}
-*/
-
-//////////////////////////////////////////////////////////
-/*
-bool AudioPlayer::loadMediaConfig( void ) {
-    cerr << "Media config read!" << endl;
-    return true;
-}
-*/
-
-//////////////////////////////////////////////////////////
 void AudioPlayer::setOutputLatencyMs(long ms) {
     if (ms < 0) ms = 0;
     if (ms > 500) ms = 500;
-    outputLatencyMs_.store(ms);
+    outputLatencyFrames_.store(ms * (long)sampleRate / 1000);
+    if (core) core->setLatencyNs(latencyNs());
     CuemsLogger::getLogger()->logInfo(
         "Audio output latency compensation updated to "
         + std::to_string(ms) + " ms");
 }
-
-//////////////////////////////////////////////////////////
-// Day-alignment log lines, from the atomics the audio callback sets. Non-RT.
-void AudioPlayer::serviceDayAlignLog() {
-    // 1) k line, once per k value per process
-    const unsigned long events = dayEvents_.load();
-    if ( events != dayEventsLogged_ ) {
-        dayEventsLogged_ = events;
-        const long k = dayK_.load();
-        if ( std::find( dayKLogged_.begin(), dayKLogged_.end(), k ) == dayKLogged_.end() ) {
-            dayKLogged_.push_back( k );
-            const std::string line = DayAlign::realignLine( k, dayEngineMs_.load(),
-                                                            dayHeadMs_.load(), dayShifts_.load() );
-            if ( DayAlign::realignIsWarning( k ) )
-                CuemsLogger::getLogger()->logWarning( line );
-            else
-                CuemsLogger::getLogger()->logInfo( line );
-        }
-    }
-
-    // 2) implausible position right after an engine offset, once per process
-    if ( !implausibleLogged_ && implausibleFlag_.load() ) {
-        implausibleLogged_ = true;
-        CuemsLogger::getLogger()->logWarning( "MTC day-align: implausible position seek="
-            + std::to_string( implausibleSeekMs_.load() ) + " ms (file end "
-            + std::to_string( implausibleEndMs_.load() ) + " ms) right after an engine offset"
-            " -- wrong MTC day, or an engine time far from now" );
-    }
-
-    // 3) an engine offset the callback could not resolve for > 2 s with MTC running
-    const long long since = offsetUnresolvedSinceMs_.load();
-    if ( since == 0 ) {
-        unresolvedLogged_ = false;
-    }
-    else if ( !unresolvedLogged_ && mtcReceiver.isTimecodeRunning.load() ) {
-        const long long nowMs = chrono::duration_cast<chrono::milliseconds>(
-            chrono::steady_clock::now().time_since_epoch() ).count();
-        if ( nowMs - since > 2000 ) {
-            unresolvedLogged_ = true;
-            CuemsLogger::getLogger()->logWarning( "MTC day-align: engine offset unresolved for "
-                + std::to_string( nowMs - since ) + " ms with MTC running (MTC head not"
-                " authoritative yet); the cue holds silence" );
-        }
-    }
-}
-
