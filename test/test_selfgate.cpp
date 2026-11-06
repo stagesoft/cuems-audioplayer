@@ -173,6 +173,8 @@ struct Crossing {
     int64_t startTarget = 0;    // the START line's target
     int64_t startRate = 0;
     int64_t startTod = 0;
+    int follows = 0;            // FOLLOW lines
+    int64_t followTarget = 0;   // the target at the follow
     int64_t S = 0;
     int64_t origin = -1;
     double eAfter = 0;          // the lock error 6 periods after the crossing
@@ -207,6 +209,8 @@ Crossing runCrossing(unsigned rate, int64_t kOff, bool lossDuringWait = false)
     }
     x.S = r.S;
     x.origin = r.f->origin();
+    x.follows = r.count(LogEvent::FOLLOW);
+    if (const LogEvent* fl = r.first(LogEvent::FOLLOW)) x.followTarget = fl->a;
     if (lossDuringWait) {
         EXPECT_GE(r.count(LogEvent::MTC_LOST), 1);
         EXPECT_GE(r.count(LogEvent::MTC_RETURN), 2);   // the rig's own start, then the return
@@ -236,6 +240,8 @@ TEST_P(PaddedStart, SampleZeroAtItsFrame)
     EXPECT_EQ(x.startTarget, -x.d) << "the START line's target: the period's target, signed";
     EXPECT_EQ(x.startRate, (int64_t)rate);
     EXPECT_EQ(x.startTod, x.S % dayalign::DAY_MS);
+    EXPECT_EQ(x.follows, 1) << "one FOLLOW line, at the follow";
+    EXPECT_LT(x.followTarget, -x.d) << "the follow landed before the crossing period";
     // the lock loop sees today's constant (|d - r K| <= r / 2 samples)
     EXPECT_NEAR(x.eAfter, ref.eAfter, 0.03) << "e after the start";
 }
@@ -603,6 +609,12 @@ TEST(Selfgate, Lines)
         EXPECT_TRUE(so);
         EXPECT_NE(journal.find("cancelstart"), std::string::npos);
     }
+    LogEvent fo;
+    fo.type = LogEvent::FOLLOW; fo.a = -4800; fo.b = 3601000; fo.c = 48000;
+    EXPECT_EQ(PlayerCore::describe(fo, "p1", &so, &lvl),
+              "follow at target -4800 samples = 100.0 ms before sample 0 (head 3601000 ms)");
+    EXPECT_FALSE(so);
+    EXPECT_EQ(lvl, 6);
     LogEvent eq;
     eq.type = LogEvent::START_EQUAL; eq.a = 3601234;
     PlayerCore::describe(eq, "p1", &so, &lvl);

@@ -107,6 +107,11 @@ void PlayerCore::applyOsc(const OscEvent& e, const A::LiveCtx& ctx)
             // selfgate: the next start is the first since this follow (a repeated
             // /mtcfollow 1 while playing is not; a cancel's fade ends in HOLD)
             firstStartPending_ = engine_.ps() != A::Ps::PLAY || engine_.cancelFading();
+            // the target when the follow lands: how early the engine committed it
+            // (869feynrj step 3 measures delta from it, plan §6)
+            if (firstStartPending_ && live_.live()) {
+                push(LogEvent::FOLLOW, target_, lastHeadMs_, (int64_t)engine_.getSampleRate());
+            }
         } else {                                          // E3
             followingMtc_ = false;
             firstStartPending_ = false;
@@ -552,6 +557,10 @@ std::string PlayerCore::describe(const LogEvent& e, const std::string& slug, boo
         }
         break;
     }
+    case LogEvent::FOLLOW:
+        snprintf(b, sizeof b, "follow at target %lld samples = %.1f ms before sample 0 (head %lld ms)",
+                 (long long)e.a, -(double)e.a * 1000.0 / (double)(e.c > 0 ? e.c : 48000), (long long)e.b);
+        break;
     case LogEvent::START_EQUAL:
         *level = 7;
         snprintf(b, sizeof b, "start %lld ms unchanged: no new start", (long long)e.a);

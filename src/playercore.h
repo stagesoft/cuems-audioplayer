@@ -52,8 +52,10 @@ struct LogEvent {
         DAY_REALIGN, DAY_UNRESOLVED, DAY_IMPLAUSIBLE,  // day alignment, logging 1-3
         // selfgate (869feynrj): START a = start ms mod day, b = target (signed file
         // samples), c = file rate; CANCEL a = seq, b = 0 hold / 1 play / 2 pastend,
-        // c = ms of output; START_EQUAL a = the start's ms mod day (debug)
-        START, CANCEL, START_EQUAL
+        // c = ms of output; START_EQUAL a = the start's ms mod day (debug);
+        // FOLLOW (869feynrj step 3, delta on the player): a = the target at the follow
+        // (signed file samples), b = the head (ms), c = the file rate
+        START, CANCEL, START_EQUAL, FOLLOW
     } type = STATS;
     int64_t a = 0, b = 0, c = 0;
     double x = 0, y = 0, z = 0;
