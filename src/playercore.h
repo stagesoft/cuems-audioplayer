@@ -14,6 +14,10 @@
 // The cue start (/offset or /start_tod) is converted into this process's
 // MTC day at first use (day alignment, cuems-RELATIONS
 // Plans/2026-10-25-mtc-day-align-24h-wrap.md §3.3 row 2 and §7; dayalign.h).
+// CAPS selfgate (cuems-RELATIONS Plans/2026-11-03-audio-first-pass-head-869feynrj.md
+// §4.1): the first start since a follow is placed at its sample (padded),
+// an equal start is a no-op, /cancelstart cancels a pending or running start
+// with an [OK] CANCEL ack, every first start prints an [OK] START line.
 #ifndef PLAYERCORE_H
 #define PLAYERCORE_H
 
@@ -31,7 +35,8 @@
 struct OscEvent {
     // START_TOD: a = the start as MTC position modulo 24 h, already normalised
     // into [0, DAY) by the OSC thread (day alignment §7.2)
-    enum Type : uint8_t { MTCFOLLOW, OFFSET_F, START_TOD, LOOP, PLAY_STOP, STOPONLOST } type = MTCFOLLOW;
+    // CANCELSTART: a = the engine's cancel seq, b = fade_ms (nargs >= 2; else 5)
+    enum Type : uint8_t { MTCFOLLOW, OFFSET_F, START_TOD, LOOP, PLAY_STOP, STOPONLOST, CANCELSTART } type = MTCFOLLOW;
     int32_t a = 0, b = 0, c = 0;
     int nargs = 0;
     double f = 0.0;
@@ -44,7 +49,11 @@ struct LogEvent {
         MTC_INVALID, FIFO_DRIFT, LP_MISMATCH, MODE, SEEK_FAILED, WRAP_FAILED, RESET_FAILED,
         TINY_LOOP, HEADER_SHORT, END, END_WAIT, SAFETY_END, STATS, PLAY_STOP_REFUSED,
         STOPONLOST_IGNORED, INVARIANT, PAST_END_START,
-        DAY_REALIGN, DAY_UNRESOLVED, DAY_IMPLAUSIBLE   // day alignment, logging 1-3
+        DAY_REALIGN, DAY_UNRESOLVED, DAY_IMPLAUSIBLE,  // day alignment, logging 1-3
+        // selfgate (869feynrj): START a = start ms mod day, b = target (signed file
+        // samples), c = file rate; CANCEL a = seq, b = 0 hold / 1 play / 2 pastend,
+        // c = ms of output; START_EQUAL a = the start's ms mod day (debug)
+        START, CANCEL, START_EQUAL
     } type = STATS;
     int64_t a = 0, b = 0, c = 0;
     double x = 0, y = 0, z = 0;
@@ -83,7 +92,14 @@ public:
     // Main loop: drain the journal
     bool popLog(LogEvent& e) { return log_.pop(e); }
     size_t logDropped() const { return log_.dropped(); }
-    static std::string describe(const LogEvent& e, const std::string& slug, bool* stdoutLine, int* level);
+    // journal: when not null, the journal twin of a stdout line (START, CANCEL), or empty
+    static std::string describe(const LogEvent& e, const std::string& slug, bool* stdoutLine, int* level,
+                                std::string* journal = nullptr);
+    // The capability line (written before RUNNING) and the output latency line
+    // (before RUNNING too, and again on a change; 869feynrj §4.1a, §4.1g)
+    static std::string capsLine(const std::string& slug);
+    static std::string latencyLine(const std::string& slug, long frames, unsigned rate, unsigned period,
+                                   bool override);
 
     // State
     lockloop::Mtc mtc() const { return live_.state(); }
@@ -102,6 +118,8 @@ public:
     bool offsetPending() const { return pendWire_ != dayalign::Wire::NONE; }
     int64_t offsetNs() const { return offsetNs_; }
     long dayConversions() const { return dayConversions_; }
+    long startsEqual() const { return startsEqual_; }
+    bool firstStartPending() const { return firstStartPending_; }
     AudioFstream& engine() { return engine_; }
 
 private:
@@ -153,6 +171,10 @@ private:
     int64_t seenK_[8] = {0};
     int nSeenK_ = 0;
     long dayConversions_ = 0;
+    // selfgate: the first start since a follow from HOLD (eligible for the padded
+    // start and its START line); cleared by that start, E3 and /cancelstart
+    bool firstStartPending_ = false;
+    long startsEqual_ = 0;
 };
 
 #endif  // PLAYERCORE_H

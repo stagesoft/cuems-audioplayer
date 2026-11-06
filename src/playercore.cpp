@@ -21,6 +21,15 @@ const double RESYNC_MS = 80.0;                          // D3
 const int RESYNC_PERIODS = 3;
 const int64_t UNRESOLVED_WARN_NS = 2000000000LL;          // day alignment, logging 3
 
+// The cue start as ms modulo 24 h (the START line, 869feynrj §4.1e)
+int64_t startMsModDay(int64_t offsetNs)
+{
+    int64_t ms = (-offsetNs) / 1000000;
+    ms %= dayalign::DAY_MS;
+    if (ms < 0) ms += dayalign::DAY_MS;
+    return ms;
+}
+
 bool mtcToLocalDay(void*, long engineMs, long& localMs, long& k)
 {
     long int l = 0, kk = 0;
@@ -95,11 +104,42 @@ void PlayerCore::applyOsc(const OscEvent& e, const A::LiveCtx& ctx)
             if (ps == A::Ps::PASTEND) {
                 if (engine_.reenable(ctx.target)) setKind(A::StartKind::REENABLE);
             }
+            // selfgate: the next start is the first since this follow (a repeated
+            // /mtcfollow 1 while playing is not; a cancel's fade ends in HOLD)
+            firstStartPending_ = engine_.ps() != A::Ps::PLAY || engine_.cancelFading();
         } else {                                          // E3
             followingMtc_ = false;
-            engine_.stopOutput();
+            firstStartPending_ = false;
+            if (!engine_.cancelFading()) engine_.stopOutput();   // a cancel's fade runs to its end
         }
         break;
+    case OscEvent::CANCELSTART: {                         // 869feynrj §4.1d: the engine's cancel is final
+        int fadeMs = e.nargs >= 2 ? e.b : 5;
+        fadeMs = std::max(0, std::min(fadeMs, 1000));
+        followingMtc_ = false;
+        firstStartPending_ = false;
+        int state = 0;                                    // 0 hold, 1 play, 2 pastend
+        int64_t ms = 0;
+        switch (ps) {
+        case A::Ps::HOLD:                                 // following off, silent (E3's path)
+            break;
+        case A::Ps::SEEKING:                              // nothing has sounded: the job is abandoned
+            engine_.stopOutput();
+            break;
+        case A::Ps::PLAY:                                 // the start began: fade out, then HOLD
+            state = 1;
+            ms = engine_.soundFramesSinceStart() * 1000 / std::max(1u, outRate_);
+            engine_.cancelOutput((int64_t)fadeMs * outRate_ / 1000);
+            break;
+        case A::Ps::PASTEND:                              // following off; the drain, if any, fades
+            state = 2;
+            ms = engine_.soundFramesSinceStart() * 1000 / std::max(1u, outRate_);
+            engine_.cancelOutput((int64_t)fadeMs * outRate_ / 1000);
+            break;
+        }
+        push(LogEvent::CANCEL, e.a, state, ms);
+        break;
+    }
     case OscEvent::OFFSET_F:
     case OscEvent::START_TOD: {                           // E4, once the start is in this day
         // the raw value is kept (latest wins) and converted at first use, once
@@ -148,7 +188,13 @@ bool PlayerCore::resolvePendingOffset()
     if (!day_.fn || !day_.fn(day_.ctx, (long)engineMs, localMs, k)) return false;
     const dayalign::Wire w = pendWire_;
     pendWire_ = dayalign::Wire::NONE;
-    offsetNs_ = dayalign::offsetNsFor(localMs);          // int64; k = 0 on /offset = floor(f) * 1e6
+    const int64_t newOffsetNs = dayalign::offsetNsFor(localMs);   // int64; k = 0 on /offset = floor(f) * 1e6
+    // selfgate §4.1c: the same start again while a pass plays (or seeks) changes
+    // nothing: no offsetChanged, so no reset job and no second glitch on a re-GO
+    const A::Ps ps0 = engine_.ps();
+    const bool equalStart = newOffsetNs == offsetNs_ && (ps0 == A::Ps::PLAY || ps0 == A::Ps::SEEKING) &&
+                            !engine_.cancelFading();
+    offsetNs_ = newOffsetNs;
     dayConversions_++;
     // logging 1: one line per k value per process; k = 0 is the aligned case, no line
     bool seen = (k == 0);
@@ -158,6 +204,11 @@ bool PlayerCore::resolvePendingOffset()
         push(LogEvent::DAY_REALIGN, k, engineMs, lastHeadMs_, (double)dayConversions_, 0, 0,
              w == dayalign::Wire::START_TOD ? 1 : 0);
     }
+    if (equalStart) {
+        startsEqual_++;
+        push(LogEvent::START_EQUAL, startMsModDay(offsetNs_));
+        return true;
+    }
     // E4. A follow (E2) or an MTC return (E9) that arrived while the value was
     // pending set the start's kind after the latch: keep it, do not relabel it
     // OFFSET (review finding 1)
@@ -165,6 +216,8 @@ bool PlayerCore::resolvePendingOffset()
     if (kindSeq_ == pendKindSeq_) setKind(A::StartKind::OFFSET);
     if (!live_.live()) return true;                       // HOLD by E7/E8: the condition starts it later
     target_ = computeTarget(lastNowNs_);
+    // a cancel's fade ends in HOLD: the start condition takes the new start from there
+    if (engine_.cancelFading()) return true;
     const A::Ps ps = engine_.ps();
     if (ps == A::Ps::PLAY || ps == A::Ps::SEEKING) {
         engine_.offsetChanged(target_);
@@ -192,6 +245,12 @@ void PlayerCore::drainEngineEvents()
                 // c = the file rate, so the log's ms are right at any rate (T7-11)
                 push(f.type == A::EvType::CACHE_START ? LogEvent::CACHE_START : LogEvent::SEEK_PICKUP,
                      f.a, f.b, (int64_t)engine_.getSampleRate(), 0, 0, 0, f.kind);
+                // selfgate §4.1e: the first start since the follow, with its target
+                // (negative or 0: on time; > 0: that many samples of head lost)
+                if (firstStartPending_) {
+                    firstStartPending_ = false;
+                    push(LogEvent::START, startMsModDay(offsetNs_), f.a, (int64_t)engine_.getSampleRate());
+                }
                 break;
             case A::EvType::HANDOVER_LATE: push(LogEvent::HANDOVER_LATE, f.a, f.b); break;
             case A::EvType::END: push(LogEvent::END, f.a); break;
@@ -269,13 +328,20 @@ void PlayerCore::callback(float* out, unsigned frames, int64_t nowNs, long headM
         implausibleWarned_ = true;
         push(LogEvent::DAY_IMPLAUSIBLE, target_ * 1000 / engine_.getSampleRate());
     }
-    if (engine_.ps() == A::Ps::HOLD && followingMtc_ && live_.live() && target_ >= 0 &&
+    if (engine_.ps() == A::Ps::HOLD && followingMtc_ && live_.live() &&
         pendWire_ == dayalign::Wire::NONE && !engine_.seekFailedLatched()) {
-        engine_.start(target_, lastKind_);
+        if (target_ >= 0) {
+            engine_.start(target_, lastKind_);
+        } else if (firstStartPending_ && engine_.startPadded(target_, lastKind_, loop_.ratio(rNom_), frames)) {
+            // selfgate §4.1b: sample 0 falls in this period and starts at its frame.
+            // No lock-loop step before the first output (pos() is defined after it)
+            settle_ = SETTLE_PERIODS;
+        }
     }
 
-    // 5. the lock loop and the feed / output events (E10, E11, E22)
-    if (engine_.ps() == A::Ps::PLAY && engine_.outPlaying()) {
+    // 5. the lock loop and the feed / output events (E10, E11, E22); none during
+    // a cancel's fade (it ends in HOLD, no correction may restart the output)
+    if (engine_.ps() == A::Ps::PLAY && engine_.outPlaying() && !engine_.cancelFading()) {
         const double eMs = (engine_.pos() - (double)target_) * 1000.0 / engine_.getSampleRate();
         lastEMs_ = eMs;
         if (settle_ > 0) {
@@ -339,18 +405,40 @@ void PlayerCore::callback(float* out, unsigned frames, int64_t nowNs, long headM
     }
 }
 
-std::string PlayerCore::describe(const LogEvent& e, const std::string& slug, bool* stdoutLine, int* level)
+std::string PlayerCore::capsLine(const std::string& slug)
+{
+    // selfgate: the padded start, /cancelstart, the START / CANCEL / LATENCY lines (869feynrj)
+    return "[" + slug + "] [OK] CAPS: loop varispeed dayalign selfgate\n";
+}
+
+std::string PlayerCore::latencyLine(const std::string& slug, long frames, unsigned rate, unsigned period,
+                                    bool override)
+{
+    char b[160];
+    snprintf(b, sizeof b, "[%s] [OK] LATENCY %ld %u %u%s\n", slug.c_str(), frames, rate, period,
+             override ? " override" : "");
+    return b;
+}
+
+std::string PlayerCore::describe(const LogEvent& e, const std::string& slug, bool* stdoutLine, int* level,
+                                 std::string* journal)
 {
     // level: 3 error, 4 warning, 6 info, 7 debug
     char b[320];
     *stdoutLine = false;
     *level = 6;
+    if (journal) journal->clear();
     static const char* kinds[] = {"reveal", "offset", "return", "correction", "fifo", "re-enable"};
     const char* kind = (e.kind >= 0 && e.kind < 6) ? kinds[e.kind] : "?";
     switch (e.type) {
     case LogEvent::CACHE_START:
-        snprintf(b, sizeof b, "cache start at %lld ms (%s) origin=%lld", (long long)(e.a * 1000 / (e.c > 0 ? e.c : 48000)),
-                 kind, (long long)e.b);
+        if (e.a < 0) {   // selfgate's padded start: sample 0 inside the period
+            snprintf(b, sizeof b, "cache start at 0 ms, padded %.2f ms (%s) origin=%lld",
+                     (double)-e.a * 1000.0 / (double)(e.c > 0 ? e.c : 48000), kind, (long long)e.b);
+        } else {
+            snprintf(b, sizeof b, "cache start at %lld ms (%s) origin=%lld", (long long)(e.a * 1000 / (e.c > 0 ? e.c : 48000)),
+                     kind, (long long)e.b);
+        }
         break;
     case LogEvent::SEEK_PICKUP:
         snprintf(b, sizeof b, "seek to %lld ms (%s) done, origin=%lld", (long long)(e.a * 1000 / (e.c > 0 ? e.c : 48000)),
@@ -440,6 +528,33 @@ std::string PlayerCore::describe(const LogEvent& e, const std::string& slug, boo
         *level = 4;
         snprintf(b, sizeof b, "cue start resolved %lld ms in the future (more than 1 h): a wrong MTC day?",
                  (long long)-e.a);
+        break;
+    case LogEvent::START:
+        *stdoutLine = true;
+        snprintf(b, sizeof b, "[%s] [OK] START %lld %lld %lld\n", slug.c_str(), (long long)e.a, (long long)e.b,
+                 (long long)e.c);
+        if (journal) {
+            char j[200];
+            snprintf(j, sizeof j, "first start since the follow: target %lld samples at %lld Hz (%s), start %lld ms",
+                     (long long)e.b, (long long)e.c, e.b > 3 ? "late, head lost" : "on time", (long long)e.a);
+            *journal = j;
+        }
+        break;
+    case LogEvent::CANCEL: {
+        static const char* states[] = {"hold", "play", "pastend"};
+        const char* st = (e.b >= 0 && e.b < 3) ? states[e.b] : "?";
+        *stdoutLine = true;
+        snprintf(b, sizeof b, "[%s] [OK] CANCEL %lld %s %lld\n", slug.c_str(), (long long)e.a, st, (long long)e.c);
+        if (journal) {
+            char j[200];
+            snprintf(j, sizeof j, "cancelstart seq=%lld: %s, %lld ms of output", (long long)e.a, st, (long long)e.c);
+            *journal = j;
+        }
+        break;
+    }
+    case LogEvent::START_EQUAL:
+        *level = 7;
+        snprintf(b, sizeof b, "start %lld ms unchanged: no new start", (long long)e.a);
         break;
     }
     return b;

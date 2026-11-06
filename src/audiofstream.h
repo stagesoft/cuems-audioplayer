@@ -160,6 +160,20 @@ class AudioFstream
 
         // h.4, the one start rule. t absolute.
         void start(int64_t t, StartKind kind);
+        // CAPS selfgate (869feynrj, plan section 4.1b): sample 0 falls inside this
+        // period (-frames x ratio < t < 0, t in file samples). From HOLD with soxr
+        // pristine and the decoder at H, the start happens this period: K =
+        // round(-t / ratio) zero frames, then soxr's output from sample 0; owed and
+        // sum(rN) count frames - K, origin, cursor and pos count from sample 0.
+        // Clean (no fade). False (nothing changed) when not possible this period.
+        bool startPadded(int64_t t, StartKind kind, double ratio, unsigned frames);
+        // /cancelstart (869feynrj, 4.1d) in PLAY or in the PASTEND drain: fade out
+        // over fadeFrames output frames, then HOLD (PLAY) or ENDED (the drain), soxr
+        // cleared by a RESET. A fade already running is left as it is.
+        void cancelOutput(int64_t fadeFrames);
+        bool cancelFading() const { return cancelFadingFlag; }
+        // Output frames of content since the last start (the padding excluded)
+        int64_t soundFramesSinceStart() const { return soundFrames; }
         // E3 / E7 / E8: out <- SILENCE, ps <- HOLD; a SEEKING job is abandoned.
         void stopOutput();
         // E4 in PLAY or SEEKING (HOLD: step 2's condition does it; PASTEND: reenable()).
@@ -409,7 +423,15 @@ class AudioFstream
         void resetFeedState();
 
         // ---- audio-thread helpers ----
-        void beginOutput(int64_t t, int64_t tPass, Feed src, StartKind kind, bool clean);
+        // evTarget: the target the start event reports (the padded start: the
+        // period's negative target); pad: the zero frames before soxr's output
+        void beginOutput(int64_t t, int64_t tPass, Feed src, StartKind kind, bool clean,
+                         int64_t evTarget = INT64_MIN, int64_t pad = 0);
+        void finishCancel();
+        int64_t padFrames;           // selfgate: zero frames before soxr's output, next process()
+        bool cancelFadingFlag;
+        int64_t cancelFadeLeft, cancelFadeLen;
+        int64_t soundFrames;         // content output frames since the last start
         void enterPastEnd(bool drain);
         void onE12orE13();
         void pickup(const LiveCtx& ctx, const JobResult& r);
