@@ -52,6 +52,7 @@ struct SgRig {
     std::vector<LogEvent> log;
     bool runWorker = true, blockWrap = false;
     int64_t S = 0;                       // the cue start sent (/start_tod, ms)
+    int64_t tickDelayNs = 0;             // reception jitter: new ticks arrive this late (the snap tests)
 
     SgRig(unsigned rate = 48000, double seconds = 3.0, Content kind = Content::RAMP, int passes = 1)
         : fileRate(rate)
@@ -101,7 +102,10 @@ struct SgRig {
                 const int64_t grid = (now / 10000000) * 10000000;
                 const long h = (long)(headBaseMs + grid / 1000000);
                 if (tick.seq == 0 || h != tick.headMs) {
-                    tick.monoNs = grid;
+                    // a tick stamped tickDelayNs late: for the player's target exactly a
+                    // tick whose head is that much stale (mtcNowNs = head + now - mono),
+                    // so the stamp may lie after now (the snap tests need > 2 ms)
+                    tick.monoNs = grid + tickDelayNs;
                     tick.headMs = h;
                     tick.anchored = true;
                     tick.complete = true;
@@ -270,6 +274,113 @@ TEST(Selfgate, TargetAlreadyPastZeroAtTheFollowIsTodaysStart)
     EXPECT_EQ(r.f->origin(), 1000) << "today's start: from the target";
     ASSERT_EQ(r.count(LogEvent::START), 1);
     EXPECT_EQ(r.first(LogEvent::START)->b, 1000) << "the head lost, as a positive target";
+}
+
+////////////////////////////////////////////////////////////
+// b'. the snap: the padded window's edge under MTC-reception jitter (step 5, R1 / R4)
+////////////////////////////////////////////////////////////
+namespace {
+struct Snap {
+    long firstNz = -1;          // first non-zero frame, relative to the crossing period
+    int64_t origin = -1;
+    long snaps = 0;
+    int starts = 0;
+    int64_t startTarget = 0;
+    double startX = 0;          // the START event's snap flag
+    double cacheX = 0;          // the CACHE_START event's snap flag
+    int resyncs = 0;
+    double eAfter = 0;          // the lock error 6 periods after the crossing
+};
+
+// The target of the crossing period K0 is t > 0. In period K0 - 1 the latest
+// quarter frame arrives jitterMs late, so that period's target is t - N r -
+// jitter: sample 0 is not in K0 - 1's padded window, and K0's on-time tick
+// carries the target straight to t (what node01 did under load).
+Snap runSnap(unsigned rate, int64_t t, double jitterMs)
+{
+    SgRig r(rate);
+    Snap s;
+    const int64_t K0 = r.k + 60;
+    r.planTarget(K0, t);
+    r.period(1);
+    r.follow();
+    r.runTo(K0 - 1);
+    r.tickDelayNs = (int64_t)std::llround(jitterMs * 1e6);
+    r.period(1);                         // K0 - 1: a late tick
+    EXPECT_TRUE(r.f->ps() == A::Ps::HOLD) << "the padded window did not catch sample 0 in K0 - 1";
+    r.tickDelayNs = 0;
+    r.period(7);                         // K0: on time again
+    s.eAfter = r.c->errorMs();
+    const long nz = r.firstNonZero();
+    s.firstNz = nz < 0 ? -1 : nz - (long)r.periodAt[(size_t)K0];
+    s.origin = r.f->origin();
+    s.snaps = r.c->snaps();
+    s.starts = r.count(LogEvent::START);
+    if (const LogEvent* e = r.first(LogEvent::START)) { s.startTarget = e->b; s.startX = e->x; }
+    for (auto& e : r.log) if (e.type == LogEvent::CACHE_START) s.cacheX = e.x;
+    s.resyncs = r.count(LogEvent::RESYNC);
+    return s;
+}
+}  // namespace
+
+class SnapStart : public ::testing::TestWithParam<std::tuple<unsigned, int>> {};
+
+TEST_P(SnapStart, JitterPastTheWindowStartsAtSampleZero)
+{
+    const unsigned rate = std::get<0>(GetParam());
+    const int64_t snapMax = (int64_t)rate * 2 / 1000;
+    const int64_t t = std::get<1>(GetParam()) < 0 ? snapMax : std::get<1>(GetParam());
+    const Crossing ref = runCrossing(rate, 0);
+    const Snap s = runSnap(rate, t, (double)t * 1000.0 / rate + 0.5);
+    ASSERT_GE(s.firstNz, 0) << "nothing sounded";
+    EXPECT_LE(std::labs(s.firstNz - ref.firstNz), 3) << "sample 0 sounds at the crossing period's first frame";
+    EXPECT_EQ(s.origin, 0) << "file position 0: the head kept";
+    EXPECT_EQ(s.snaps, 1);
+    ASSERT_EQ(s.starts, 1);
+    EXPECT_EQ(s.startTarget, t) << "the START line keeps the honest target: t samples late";
+    EXPECT_EQ(s.startX, 1.0) << "the START line's snap flag";
+    EXPECT_EQ(s.cacheX, 1.0);
+    EXPECT_EQ(s.resyncs, 0);
+    // the lock loop sees the start t samples behind MTC: today's constant minus t / rate
+    EXPECT_NEAR(s.eAfter, ref.eAfter - (double)t * 1000.0 / rate, 0.05);
+}
+
+// t = 1, 57 (node01's worst under the R4 knob), -1 = the bound itself (2 ms)
+INSTANTIATE_TEST_SUITE_P(Targets, SnapStart,
+                         ::testing::Combine(::testing::Values(48000u, 44100u), ::testing::Values(1, 57, -1)));
+
+TEST(Selfgate, SnapBoundIsTwoMs)
+{
+    // one sample above 2 ms: today's start from the target (a late follow, not jitter)
+    const int64_t t = 48000 * 2 / 1000 + 1;
+    const Snap s = runSnap(48000, t, (double)t * 1000.0 / 48000 + 0.5);
+    EXPECT_EQ(s.origin, t);
+    EXPECT_EQ(s.snaps, 0);
+    ASSERT_EQ(s.starts, 1);
+    EXPECT_EQ(s.startTarget, t);
+    EXPECT_EQ(s.startX, 0.0);
+}
+
+TEST(Selfgate, SnapNotForANonFirstStart)
+{
+    // a running pass superseded (E4 in PLAY) to a target 50 samples past sample 0:
+    // not the first start since the follow, so today's start from the target
+    SgRig r(48000);
+    const int64_t K0 = r.k + 30;
+    r.planTarget(K0, -100);
+    r.follow();
+    r.runTo(K0 + 10);
+    ASSERT_TRUE(r.f->ps() == A::Ps::PLAY);
+    ASSERT_EQ(r.c->snaps(), 0);
+    // the new start: target 50 at the next period
+    const long double xStar = 50.0L * 1e9L / 48000;
+    const long double base = (long double)r.headBaseMs * 1e6L + (long double)r.nowAt(r.k) - xStar;
+    const int64_t S2 = (int64_t)std::ceil((double)(base / 1e6L));
+    r.c->setLatencyNs((int64_t)std::llround((double)((long double)S2 * 1e6L - base)));
+    r.latch(OscEvent::START_TOD, (int32_t)(S2 % dayalign::DAY_MS));
+    r.period(4);
+    EXPECT_EQ(r.c->snaps(), 0);
+    EXPECT_GT(r.f->origin(), 0) << "from the target, not sample 0";
 }
 
 ////////////////////////////////////////////////////////////
@@ -600,6 +711,13 @@ TEST(Selfgate, Lines)
     EXPECT_EQ(PlayerCore::describe(s, "p1", &so, &lvl, &journal), "[p1] [OK] START 3601234 -255 44100\n");
     EXPECT_TRUE(so);
     EXPECT_FALSE(journal.empty());
+    // the snap: a trailing "snap" field, the journal says the head was kept
+    s.b = 57; s.x = 1.0;
+    EXPECT_EQ(PlayerCore::describe(s, "p1", &so, &lvl, &journal), "[p1] [OK] START 3601234 57 44100 snap\n");
+    EXPECT_NE(journal.find("head kept"), std::string::npos) << journal;
+    LogEvent cs;
+    cs.type = LogEvent::CACHE_START; cs.a = 57; cs.b = 0; cs.c = 44100; cs.x = 1.0;
+    EXPECT_NE(PlayerCore::describe(cs, "p1", &so, &lvl).find("snapped 1.29 ms late, head kept"), std::string::npos);
     for (int st = 0; st < 3; st++) {
         LogEvent cl;
         cl.type = LogEvent::CANCEL; cl.a = 9; cl.b = st; cl.c = st ? 42 : 0;

@@ -2071,25 +2071,47 @@ void AudioFstream::start(int64_t t, StartKind kind)
 // sounds at its frame. owed and sum(rN) count frames - K (process()), so pos()
 // stays origin + sum(rN) + c with origin 0, and the lock loop sees today's
 // constant offset once SETTLE ends.
-bool AudioFstream::startPadded(int64_t t, StartKind kind, double ratio, unsigned frames)
+bool AudioFstream::cleanZeroStartPossible() const
 {
-    if (!feedReady || psState != Ps::HOLD || t >= 0 || !(ratio > 0.0)) return false;
+    if (!feedReady || psState != Ps::HOLD) return false;
     // a clean start needs soxr pristine and the decoder at H, no SEEK or RESET outstanding
     if (!soxrPristineFlag || !decAtHFlag || outstandingKind[1] != 0 || outstandingKind[3] != 0) return false;
+    if (endSamples() <= 0) return false;
+    // sample 0 is a cache start (start()'s step 3 at tp = 0)
+    const int64_t p = periodForStart();
+    return cacheOnly() ? 0 < ((lDec >= 0) ? std::min(p, lDec) : p)
+                       : 0 < cacheH - (int64_t)fileSampleRate / 4;
+}
+
+bool AudioFstream::startPadded(int64_t t, StartKind kind, double ratio, unsigned frames)
+{
+    if (t >= 0 || !(ratio > 0.0)) return false;
     const double d = (double)(-t);
     if (d >= (double)frames * ratio) return false;           // sample 0 is not in this period
     const int64_t K = (int64_t)std::llround(d / ratio);
     if (K >= (int64_t)frames) return false;                  // it is the next period's first frame
-    if (endSamples() <= 0) return false;
-    // sample 0 is a cache start (start()'s step 3 at tp = 0)
-    const int64_t p = periodForStart();
-    const bool cacheStart = cacheOnly() ? 0 < ((lDec >= 0) ? std::min(p, lDec) : p)
-                                        : 0 < cacheH - (int64_t)fileSampleRate / 4;
-    if (!cacheStart) return false;
+    if (!cleanZeroStartPossible()) return false;
     chasing = false;
     pickupPending = false;
     retryFramesLeft = 0;
     beginOutput(0, 0, Feed::CACHE, kind, true, t, K);
+    return true;
+}
+
+// The padded window's edge (869feynrj step 5, R1 / R4): the target is re-derived
+// every period from the latest MTC quarter frame, so its reception jitter can
+// carry it from "sample 0 in the next period" straight to "a few samples past
+// sample 0" without ever entering the padded window. Start at sample 0 now: the
+// head is kept, the start is t samples late, and the lock loop pulls in the
+// -t / rate offset through the ratio once SETTLE ends (|e| far below RESYNC_MS).
+bool AudioFstream::startAtZero(int64_t t, StartKind kind)
+{
+    if (t <= 0) return false;
+    if (!cleanZeroStartPossible()) return false;
+    chasing = false;
+    pickupPending = false;
+    retryFramesLeft = 0;
+    beginOutput(0, 0, Feed::CACHE, kind, true, t, 0);
     return true;
 }
 

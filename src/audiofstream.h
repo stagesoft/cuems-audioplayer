@@ -167,6 +167,13 @@ class AudioFstream
         // sum(rN) count frames - K, origin, cursor and pos count from sample 0.
         // Clean (no fade). False (nothing changed) when not possible this period.
         bool startPadded(int64_t t, StartKind kind, double ratio, unsigned frames);
+        // CAPS selfgate snap (869feynrj step 5, the padded-window edge): a first start
+        // whose target t (file samples, t > 0) is only a jitter step past sample 0
+        // starts at sample 0 this period anyway, t samples late with the head kept,
+        // instead of t samples into the file. Same preconditions as startPadded
+        // (HOLD, soxr pristine, the decoder at H, sample 0 a cache start); clean (no
+        // fade). The caller bounds t. False (nothing changed) when not possible.
+        bool startAtZero(int64_t t, StartKind kind);
         // /cancelstart (869feynrj, 4.1d) in PLAY or in the PASTEND drain: fade out
         // over fadeFrames output frames, then HOLD (PLAY) or ENDED (the drain), soxr
         // cleared by a RESET. A fade already running is left as it is.
@@ -423,8 +430,13 @@ class AudioFstream
         void resetFeedState();
 
         // ---- audio-thread helpers ----
+        // startPadded / startAtZero: a clean start at sample 0 is possible now (HOLD,
+        // soxr pristine, the decoder at H, no SEEK or RESET outstanding, sample 0 a
+        // cache start)
+        bool cleanZeroStartPossible() const;
         // evTarget: the target the start event reports (the padded start: the
-        // period's negative target); pad: the zero frames before soxr's output
+        // period's negative target; the snap: its positive one); pad: the zero
+        // frames before soxr's output
         void beginOutput(int64_t t, int64_t tPass, Feed src, StartKind kind, bool clean,
                          int64_t evTarget = INT64_MIN, int64_t pad = 0);
         void finishCancel();

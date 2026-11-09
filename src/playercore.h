@@ -15,7 +15,8 @@
 // MTC day at first use (day alignment, cuems-RELATIONS
 // Plans/2026-10-25-mtc-day-align-24h-wrap.md §3.3 row 2 and §7; dayalign.h).
 // CAPS selfgate (cuems-RELATIONS Plans/2026-11-03-audio-first-pass-head-869feynrj.md
-// §4.1): the first start since a follow is placed at its sample (padded),
+// §4.1): the first start since a follow is placed at its sample (padded), or
+// snapped to sample 0 when MTC jitter carried its target <= 2 ms past it,
 // an equal start is a no-op, /cancelstart cancels a pending or running start
 // with an [OK] CANCEL ack, every first start prints an [OK] START line.
 #ifndef PLAYERCORE_H
@@ -122,6 +123,7 @@ public:
     long dayConversions() const { return dayConversions_; }
     long startsEqual() const { return startsEqual_; }
     bool firstStartPending() const { return firstStartPending_; }
+    long snaps() const { return snaps_; }
     AudioFstream& engine() { return engine_; }
 
 private:
@@ -177,6 +179,9 @@ private:
     // start and its START line); cleared by that start, E3 and /cancelstart
     bool firstStartPending_ = false;
     long startsEqual_ = 0;
+    // selfgate snap: set by the snap's startAtZero, consumed by its CACHE_START event
+    bool snapStart_ = false;
+    long snaps_ = 0;
 };
 
 #endif  // PLAYERCORE_H

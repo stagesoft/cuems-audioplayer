@@ -20,6 +20,12 @@ const int SETTLE_PERIODS = 3;
 const double RESYNC_MS = 80.0;                          // D3
 const int RESYNC_PERIODS = 3;
 const int64_t UNRESOLVED_WARN_NS = 2000000000LL;          // day alignment, logging 3
+// selfgate snap (869feynrj step 5): a first start at most this far past sample 0
+// starts at sample 0 (head kept, late by the target). Above the MTC-reception
+// jitter seen on node01 (2 samples idle, 57 under load, 44.1 kHz), far below a
+// late follow (R16: 7.4 ms) or an unarmed cue (R2: ~300 ms), which keep today's
+// start from the target.
+const int64_t SNAP_MAX_MS = 2;
 
 // The cue start as ms modulo 24 h (the START line, 869feynrj §4.1e)
 int64_t startMsModDay(int64_t offsetNs)
@@ -247,16 +253,23 @@ void PlayerCore::drainEngineEvents()
                 e10_ = 0;
                 loop_.resetFilter();
                 starts_++;
-                // c = the file rate, so the log's ms are right at any rate (T7-11)
+            {
+                // the snap's start event: a cache start at sample 0 reporting its positive target
+                const bool snapped = snapStart_ && f.type == A::EvType::CACHE_START;
+                snapStart_ = false;
+                // c = the file rate, so the log's ms are right at any rate (T7-11); x = 1: the snap
                 push(f.type == A::EvType::CACHE_START ? LogEvent::CACHE_START : LogEvent::SEEK_PICKUP,
-                     f.a, f.b, (int64_t)engine_.getSampleRate(), 0, 0, 0, f.kind);
+                     f.a, f.b, (int64_t)engine_.getSampleRate(), snapped ? 1.0 : 0.0, 0, 0, f.kind);
                 // selfgate §4.1e: the first start since the follow, with its target
-                // (negative or 0: on time; > 0: that many samples of head lost)
+                // (negative or 0: on time; > 0: that many samples late: head lost, or
+                // kept when snapped to sample 0, x = 1 and a trailing "snap" field)
                 if (firstStartPending_) {
                     firstStartPending_ = false;
-                    push(LogEvent::START, startMsModDay(offsetNs_), f.a, (int64_t)engine_.getSampleRate());
+                    push(LogEvent::START, startMsModDay(offsetNs_), f.a, (int64_t)engine_.getSampleRate(),
+                         snapped ? 1.0 : 0.0);
                 }
                 break;
+            }
             case A::EvType::HANDOVER_LATE: push(LogEvent::HANDOVER_LATE, f.a, f.b); break;
             case A::EvType::END: push(LogEvent::END, f.a); break;
             case A::EvType::SEEK_FAILED: push(LogEvent::SEEK_FAILED, f.a); break;
@@ -336,7 +349,15 @@ void PlayerCore::callback(float* out, unsigned frames, int64_t nowNs, long headM
     if (engine_.ps() == A::Ps::HOLD && followingMtc_ && live_.live() &&
         pendWire_ == dayalign::Wire::NONE && !engine_.seekFailedLatched()) {
         if (target_ >= 0) {
-            engine_.start(target_, lastKind_);
+            const int64_t snapMax = (int64_t)engine_.getSampleRate() * SNAP_MAX_MS / 1000;
+            if (firstStartPending_ && target_ > 0 && target_ <= snapMax && engine_.startAtZero(target_, lastKind_)) {
+                // selfgate snap: the jitter stepped over the padded window's edge
+                snapStart_ = true;
+                snaps_++;
+                settle_ = SETTLE_PERIODS;
+            } else {
+                engine_.start(target_, lastKind_);
+            }
         } else if (firstStartPending_ && engine_.startPadded(target_, lastKind_, loop_.ratio(rNom_), frames)) {
             // selfgate §4.1b: sample 0 falls in this period and starts at its frame.
             // No lock-loop step before the first output (pos() is defined after it)
@@ -440,6 +461,9 @@ std::string PlayerCore::describe(const LogEvent& e, const std::string& slug, boo
         if (e.a < 0) {   // selfgate's padded start: sample 0 inside the period
             snprintf(b, sizeof b, "cache start at 0 ms, padded %.2f ms (%s) origin=%lld",
                      (double)-e.a * 1000.0 / (double)(e.c > 0 ? e.c : 48000), kind, (long long)e.b);
+        } else if (e.x != 0.0) {   // selfgate's snap: sample 0, the target a jitter step past it
+            snprintf(b, sizeof b, "cache start at 0 ms, snapped %.2f ms late, head kept (%s) origin=%lld",
+                     (double)e.a * 1000.0 / (double)(e.c > 0 ? e.c : 48000), kind, (long long)e.b);
         } else {
             snprintf(b, sizeof b, "cache start at %lld ms (%s) origin=%lld", (long long)(e.a * 1000 / (e.c > 0 ? e.c : 48000)),
                      kind, (long long)e.b);
@@ -536,12 +560,15 @@ std::string PlayerCore::describe(const LogEvent& e, const std::string& slug, boo
         break;
     case LogEvent::START:
         *stdoutLine = true;
-        snprintf(b, sizeof b, "[%s] [OK] START %lld %lld %lld\n", slug.c_str(), (long long)e.a, (long long)e.b,
-                 (long long)e.c);
+        // a 4th field "snap" when snapped to sample 0 (engines parse >= 3 fields)
+        snprintf(b, sizeof b, "[%s] [OK] START %lld %lld %lld%s\n", slug.c_str(), (long long)e.a, (long long)e.b,
+                 (long long)e.c, e.x != 0.0 ? " snap" : "");
         if (journal) {
             char j[200];
             snprintf(j, sizeof j, "first start since the follow: target %lld samples at %lld Hz (%s), start %lld ms",
-                     (long long)e.b, (long long)e.c, e.b > 3 ? "late, head lost" : "on time", (long long)e.a);
+                     (long long)e.b, (long long)e.c,
+                     e.x != 0.0 ? "late, head kept: snapped to sample 0" : e.b > 3 ? "late, head lost" : "on time",
+                     (long long)e.a);
             *journal = j;
         }
         break;
