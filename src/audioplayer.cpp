@@ -502,9 +502,12 @@ void AudioPlayer::drainJournal( void ) {
     while (core->popLog(e)) {
         bool toStdout = false;
         int level = 6;
-        const std::string line = PlayerCore::describe(e, slug, &toStdout, &level);
+        std::string journal;
+        const std::string line = PlayerCore::describe(e, slug, &toStdout, &level, &journal);
         if (toStdout) {
             writeLine(line);
+            // START and CANCEL also go to the journal (the engine reads only stdout)
+            if (!journal.empty()) CuemsLogger::getLogger()->logInfo(journal);
             continue;
         }
         switch (level) {
@@ -664,6 +667,27 @@ void AudioPlayer::ProcessMessage( const osc::ReceivedMessage& m,
             e.type = OscEvent::STOPONLOST;
             e.a = valueOSC;
             core->latch(e);
+        // Cancel a pending or running start (selfgate, 869feynrj §4.1d):
+        // i:seq [i:fade_ms], acked with [OK] CANCEL by the audio thread's journal
+        } else if ( is("/cancelstart") ) {
+            int32_t v[2] = {0, 5};
+            int n = 0;
+            for (auto it = m.ArgumentsBegin(); it != m.ArgumentsEnd() && n < 2; ++it) {
+                if (!intArg(*it, v[n])) break;
+                n++;
+            }
+            if (n == 0) {
+                CuemsLogger::getLogger()->logError("OSC: /cancelstart without a seq: ignored");
+                return;
+            }
+            OscEvent e;
+            e.type = OscEvent::CANCELSTART;
+            e.a = v[0];
+            e.b = v[1];
+            e.nargs = n;
+            core->latch(e);
+            CuemsLogger::getLogger()->logInfo("OSC: /cancelstart seq=" + std::to_string(v[0]) +
+                                              " fade_ms=" + std::to_string(n >= 2 ? v[1] : 5));
         // MTC Follow - value: 0 = don't follow MTC, non-zero = follow MTC
         } else if ( is("/mtcfollow") ) {
             int32_t valueOSC;
@@ -691,4 +715,12 @@ void AudioPlayer::setOutputLatencyMs(long ms) {
     CuemsLogger::getLogger()->logInfo(
         "Audio output latency compensation updated to "
         + std::to_string(ms) + " ms");
+    // the engine reads the change (869feynrj §4.1g); never the audio thread
+    if (!slug.empty()) writeLine(latencyLine());
+}
+
+//////////////////////////////////////////////////////////
+std::string AudioPlayer::latencyLine( void ) const {
+    return PlayerCore::latencyLine(slug, outputLatencyFrames_.load(), sampleRate, bufferFrames,
+                                   m_explicitLatencyMs >= 0);
 }

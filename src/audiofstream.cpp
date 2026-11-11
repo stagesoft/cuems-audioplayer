@@ -1204,6 +1204,10 @@ void AudioFstream::resetFeedState()
     resetAfterStart = false;
     wrapFailed = false;
     fadeOutLeft = fadeOutLen = 0;
+    padFrames = 0;
+    cancelFadingFlag = false;
+    cancelFadeLeft = cancelFadeLen = 0;
+    soundFrames = 0;
     drainEndContent = 0.0;
     nEvents = 0;
     invViolations = 0;
@@ -2060,11 +2064,67 @@ void AudioFstream::start(int64_t t, StartKind kind)
     post(JobKind::SEEK, tp);
 }
 
-void AudioFstream::beginOutput(int64_t t, int64_t tPass, Feed src, StartKind kind, bool clean)
+// CAPS selfgate (869feynrj, plan section 4.1b): the start of a period that holds
+// sample 0. Today's path would wait for the next period and start there at file
+// position target >= 0, losing the head; here the period starts with K zero
+// frames and soxr's output from sample 0 is written at out + K, so sample 0
+// sounds at its frame. owed and sum(rN) count frames - K (process()), so pos()
+// stays origin + sum(rN) + c with origin 0, and the lock loop sees today's
+// constant offset once SETTLE ends.
+bool AudioFstream::cleanZeroStartPossible() const
+{
+    if (!feedReady || psState != Ps::HOLD) return false;
+    // a clean start needs soxr pristine and the decoder at H, no SEEK or RESET outstanding
+    if (!soxrPristineFlag || !decAtHFlag || outstandingKind[1] != 0 || outstandingKind[3] != 0) return false;
+    if (endSamples() <= 0) return false;
+    // sample 0 is a cache start (start()'s step 3 at tp = 0)
+    const int64_t p = periodForStart();
+    return cacheOnly() ? 0 < ((lDec >= 0) ? std::min(p, lDec) : p)
+                       : 0 < cacheH - (int64_t)fileSampleRate / 4;
+}
+
+bool AudioFstream::startPadded(int64_t t, StartKind kind, double ratio, unsigned frames)
+{
+    if (t >= 0 || !(ratio > 0.0)) return false;
+    const double d = (double)(-t);
+    if (d >= (double)frames * ratio) return false;           // sample 0 is not in this period
+    const int64_t K = (int64_t)std::llround(d / ratio);
+    if (K >= (int64_t)frames) return false;                  // it is the next period's first frame
+    if (!cleanZeroStartPossible()) return false;
+    chasing = false;
+    pickupPending = false;
+    retryFramesLeft = 0;
+    beginOutput(0, 0, Feed::CACHE, kind, true, t, K);
+    return true;
+}
+
+// The padded window's edge (869feynrj step 5, R1 / R4): the target is re-derived
+// every period from the latest MTC quarter frame, so its reception jitter can
+// carry it from "sample 0 in the next period" straight to "a few samples past
+// sample 0" without ever entering the padded window. Start at sample 0 now: the
+// head is kept, the start is t samples late, and the lock loop pulls in the
+// -t / rate offset through the ratio once SETTLE ends (|e| far below RESYNC_MS).
+bool AudioFstream::startAtZero(int64_t t, StartKind kind)
+{
+    if (t <= 0) return false;
+    if (!cleanZeroStartPossible()) return false;
+    chasing = false;
+    pickupPending = false;
+    retryFramesLeft = 0;
+    beginOutput(0, 0, Feed::CACHE, kind, true, t, 0);
+    return true;
+}
+
+void AudioFstream::beginOutput(int64_t t, int64_t tPass, Feed src, StartKind kind, bool clean,
+                               int64_t evTarget, int64_t pad)
 {
     const int64_t p = periodForStart();
     const bool loop = looping() && p < INF_SAMPLES;
     passIdx = loop ? t / p : 0;
+    padFrames = pad;
+    soundFrames = 0;
+    cancelFadingFlag = false;      // a new start ends a cancel's fade
+    cancelFadeLeft = cancelFadeLen = 0;
     originAbs = (loop ? passIdx * p : 0) + tPass;
     feedSrc = src;
     cur = tPass;
@@ -2079,8 +2139,43 @@ void AudioFstream::beginOutput(int64_t t, int64_t tPass, Feed src, StartKind kin
     soxrPristineFlag = false;
     wrapFailed = false;
     seekTries = 0;
-    ev(src == Feed::DECODER ? EvType::SEEK_PICKUP : EvType::CACHE_START, t, originAbs, (int)kind);
+    ev(src == Feed::DECODER ? EvType::SEEK_PICKUP : EvType::CACHE_START,
+       evTarget != INT64_MIN ? evTarget : t, originAbs, (int)kind);
     resetAfterStart = false;
+}
+
+// /cancelstart (869feynrj, plan section 4.1d): the engine's cancel is final.
+void AudioFstream::cancelOutput(int64_t fadeFrames)
+{
+    if (cancelFadingFlag) return;                            // a second cancel changes nothing
+    const bool playing = (psState == Ps::PLAY && outPlay) ||
+                         (psState == Ps::PASTEND && feedSrc == Feed::DRAIN && outPlay);
+    if (!playing) return;
+    cancelFadingFlag = true;
+    cancelFadeLen = cancelFadeLeft = std::max<int64_t>(1, fadeFrames);
+}
+
+// The end of a cancel's fade (or nothing left to fade): silence, soxr cleared
+// by a RESET as after any stop, so a re-follow can start clean again.
+void AudioFstream::finishCancel()
+{
+    cancelFadingFlag = false;
+    cancelFadeLeft = cancelFadeLen = 0;
+    if (psState == Ps::PLAY) {
+        outPlay = false;
+        psState = Ps::HOLD;
+        chasing = false;
+        pickupPending = false;
+        retryFramesLeft = 0;
+        post(JobKind::RESET);
+    } else if (psState == Ps::PASTEND && feedSrc == Feed::DRAIN) {
+        feedSrc = Feed::ENDED;                               // as E21
+        outPlay = false;
+        wrapFailed = false;
+        ev(EvType::DRAINED);
+        post(JobKind::RESET);
+    }
+    // otherwise nothing plays any more (an MTC loss stopped it, or E21 ended the drain)
 }
 
 void AudioFstream::enterPastEnd(bool drain)
@@ -2395,12 +2490,20 @@ size_t AudioFstream::process(float* out, size_t frames, double ratio, const Live
     }
 
     const bool playedThisCall = (psState == Ps::PLAY && outPlay);
+    // selfgate's padded start: K zero frames first, soxr writes from out + K (4.1b)
+    size_t pad = 0;
+    if (playedThisCall && padFrames > 0) {
+        pad = (size_t)std::min<int64_t>(padFrames, (int64_t)frames);
+        memset(out, 0, pad * ch * sizeof(float));
+        done = pad;
+    }
+    padFrames = 0;
     if (playedThisCall) {
         // the working ratio, every period (G12: also restores it after a clear)
         soxr_set_io_ratio(vrs, ratio, frames);
         lastRatio = ratio;
-        owed += ratio * (double)frames;
-        sumRN += ratio * (double)frames;
+        owed += ratio * (double)(frames - pad);
+        sumRN += ratio * (double)(frames - pad);
         for (int guard = 0; done < frames && guard < 64 && psState == Ps::PLAY && outPlay; guard++) {
             const float* in = nullptr;
             size_t avail = 0;
@@ -2468,12 +2571,27 @@ size_t AudioFstream::process(float* out, size_t frames, double ratio, const Live
             post(JobKind::RESET);
         }
     }
-    lastProduced = done;
+    lastProduced = done - pad;
+    soundFrames += (int64_t)(done - pad);
     // 2 ms fade-in after a start (none for the clean reveal)
     if (fadeLeft > 0) {
-        for (size_t k = 0; k < done && fadeLeft > 0; k++, fadeLeft--) {
+        for (size_t k = pad; k < done && fadeLeft > 0; k++, fadeLeft--) {
             const float g = (float)(fadeLen - fadeLeft) / (float)fadeLen;
             for (unsigned c = 0; c < ch; c++) out[k * ch + c] *= g;
+        }
+    }
+    // a cancel's fade-out (/cancelstart, 4.1d): gain 1 down to 1/len, then silence
+    if (cancelFadingFlag) {
+        size_t k = 0;
+        for (; k < done && cancelFadeLeft > 0; k++, cancelFadeLeft--) {
+            const float g = (float)cancelFadeLeft / (float)cancelFadeLen;
+            for (unsigned c = 0; c < ch; c++) out[k * ch + c] *= g;
+        }
+        const bool stillPlaying = (psState == Ps::PLAY && outPlay) ||
+                                  (psState == Ps::PASTEND && feedSrc == Feed::DRAIN && outPlay);
+        if (cancelFadeLeft <= 0 || !stillPlaying) {
+            if (k < done) memset(out + k * ch, 0, (done - k) * ch * sizeof(float));
+            finishCancel();
         }
     }
     if (done < frames) {
