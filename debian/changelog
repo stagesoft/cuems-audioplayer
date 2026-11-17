@@ -1,3 +1,22 @@
+cuems-audioplayer (0.0.3-16) bookworm; urgency=medium
+
+  * Merge rc_1 into debian/bookworm (0.0.3-16, 869feynrj Phase A, PR #11):
+    the first hit of an AudioCue is no longer lost. New CAPS token selfgate:
+    - a follow that arrives a fraction of a JACK period before the cue's
+      start begins at sample 0 and pads the gap with silence, instead of
+      seeking into the file;
+    - a first start 0 < target <= 2 ms late (MTC/JACK jitter) is snapped to
+      sample 0 and the head kept (INFO "snapped X ms late, head kept");
+    - /cancelstart i:seq [i:fade_ms] cancels a pending self-gated start;
+    - journal lines [OK] START (target in samples, snap field), [OK] CANCEL,
+      [OK] LATENCY, and "first start since the follow: ... (on time | late,
+      head lost)".
+  * Compatibility: an engine without selfgate gets the 0.0.3-15 behaviour
+    byte for byte. Pairs with cuems-engine 0.1.0rc6-8; install both on every
+    box of a cluster.
+
+ -- Ion Reguera <ion@stagelab.coop>  Tue, 17 Nov 2026 20:02:11 +0100
+
 cuems-audioplayer (0.0.3-15) bookworm; urgency=medium
 
   * Merge rc_1 into debian/bookworm (0.0.3-15, 869ejxng3 batch, PR #9): new
