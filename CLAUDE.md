@@ -72,6 +72,31 @@ This makes the player **self-gating**: it can follow MTC early and auto-start at
 `start_mtc`, so the engine's per-cue reveal OSC becomes optional (kept as
 belt-and-suspenders until the fleet runs the fixed binary).
 
+**Self-gated start, CAPS `selfgate` (869feynrj, `cuems-RELATIONS/Plans/2026-11-03-audio-first-pass-head-869feynrj.md`
+§4.1).** The engine follows early and the player starts itself, at the sample:
+- **Padded start**: the first start since a `/mtcfollow 1` from HOLD, soxr pristine, when sample 0 falls inside the
+  period (`−N·r < target < 0`): K = round(−target / r) zero frames, then soxr's output from sample 0
+  (`AudioFstream::startPadded`; `process()` counts `owed`/`sum(rN)` over N − K). Clean, no fade. Without this the start
+  waited for the next period and began at file position target ≥ 0, losing up to a period of head.
+- **Snap** (869feynrj step 5): the target is re-derived every period from the *latest* MTC quarter frame, so its
+  reception jitter can step a first start straight over the padded window (node01: +2 samples idle, up to 57 under
+  load). A first start with `0 < target ≤ 2 ms` of file samples (`SNAP_MAX_MS`) starts clean at sample 0 instead
+  (`AudioFstream::startAtZero`): head kept, `target` samples late, the lock loop pulls the offset in. Larger targets
+  and every non-first start keep today's start from the target. The root cause (no filter on the tick jitter) is
+  ClickUp 1amfwm7h5qk.
+- **Equal start**: a `/start_tod` (or `/offset`) equal to the running one while PLAY/SEEKING is a no-op (`START_EQUAL`
+  debug line, `startsEqual()`): no reset job, no second glitch on a re-GO.
+- **`/cancelstart i:seq [i:fade_ms = 5]`**: the engine's cancel is final. HOLD/SEEKING: following off, silent. PLAY:
+  fade over `fade_ms`, then HOLD and a RESET (soxr pristine again, so a re-follow pads again). PASTEND: following off
+  (a running drain fades). No E10/E11/E22 during the fade. Acked on stdout `[OK] CANCEL <seq> <hold|play|pastend> <ms
+  of output>` plus a journal line; a second cancel during a fade is acked `play` and changes nothing.
+- **`[OK] START <start_ms_mod_day> <target> <file_rate>[ snap]`** on stdout at the first start since each follow
+  (target in signed file samples: ≤ 0 on time, > 0 = that many samples late: head lost, or head kept when the trailing
+  `snap` field is there), plus a journal line. Engines parse ≥ 3 fields, so the 4th is safe for older ones.
+- **`[OK] LATENCY <frames> <rate> <period>[ override]`** written next to CAPS, before RUNNING (and again on
+  `setOutputLatencyMs`): the latency the start target compensates.
+Tests: `test/test_selfgate.cpp` (exact fake clock: the target is placed at any sample of a period).
+
 **Looping audio with video: the guarantee (Ion, 2026-10-19).** Audio and video stay in
 sync across the passes of a loop **only if (A) their durations are exactly the same, or
 (B) they are in the same container** (one file; this player extracts the audio). Two
