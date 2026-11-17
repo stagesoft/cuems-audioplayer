@@ -88,6 +88,8 @@ class AudioPlayer : public OscReceiver
         // Set the audio output-pipeline latency compensation in ms.
         // Values outside [0, 500] are clamped.
         void setOutputLatencyMs(long ms);
+        // [OK] LATENCY <frames> <rate> <period>[ override] (869feynrj §4.1g)
+        std::string latencyLine( void ) const;
         ~AudioPlayer( void );
         //////////////////////////////////////////
 

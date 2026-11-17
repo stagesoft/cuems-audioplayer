@@ -378,10 +378,17 @@ int main( int argc, char *argv[] ) {
     logger->logInfo( "MTC day-align: on (12 h rule, tod)" );
 
     // The capability line, before RUNNING, in one write(2) (section 4.2); `dayalign`:
-    // the engine sends /start_tod (day alignment §7.2)
+    // the engine sends /start_tod (day alignment §7.2); `selfgate`: the padded start,
+    // /cancelstart and the START / CANCEL / LATENCY lines (869feynrj §4.1)
     {
-        const std::string caps = "[" + logger->getSlug() + "] [OK] CAPS: loop varispeed dayalign\n";
+        const std::string caps = PlayerCore::capsLine(logger->getSlug());
         ssize_t r = ::write(STDOUT_FILENO, caps.data(), caps.size());
+        (void)r;
+        // the output latency the start target compensates, before RUNNING so the
+        // engine has it with the first armed_ready (869feynrj §4.1g, D8); final here:
+        // the stream is open and was re-queried after startStream
+        const std::string lat = myAudioPlayer->latencyLine();
+        r = ::write(STDOUT_FILENO, lat.data(), lat.size());
         (void)r;
     }
     sigUsr1Handler( SIGUSR1 );
